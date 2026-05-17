@@ -1,0 +1,9 @@
+pynput
+pyaudio
+paramiko
+mss
+Pillow
+pycaw
+screen-brightness-control
+requests
+google-generativeai
