@@ -10,6 +10,7 @@ import sys
 
 from brain import respond as respond_with_brain
 from stt import transcribe
+from tts import speak as speak_reply
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -81,6 +82,8 @@ def handle_user_text(text: str, source: str = "text"):
     config = load_config()
     response = respond_with_brain(text, config)
     if response.strip():
+        print(f"[main] assistant response: {response}")
+        speak_reply(response, config)
         return response
     if source == "voice":
         return f"Heard: {text}"
