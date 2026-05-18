@@ -234,10 +234,11 @@ class NativeCopilotHook:
 
 
 class InputHandler:
-    def __init__(self, widget, config, on_audio=None):
+    def __init__(self, widget, config, on_audio=None, on_interrupt=None):
         self.widget = widget
         self.config = config
         self.on_audio = on_audio
+        self.on_interrupt = on_interrupt
         self.recorder = AudioRecorder(config)
         self.listener = None
         self.native_hook = None
@@ -302,7 +303,12 @@ class InputHandler:
                 self._stop_recording(send=True)
                 return
             if self.state != "idle":
-                return
+                self._stop_recording(send=False)
+            if self.on_interrupt:
+                try:
+                    self.on_interrupt("voice_press")
+                except Exception:
+                    pass
             self.f23_down_time = time.monotonic()
             try:
                 self.recorder.start()
@@ -370,7 +376,7 @@ class InputHandler:
         threading.Thread(target=run_pipeline, daemon=True).start()
 
 
-def start(widget, config, on_audio=None):
-    handler = InputHandler(widget, config, on_audio=on_audio)
+def start(widget, config, on_audio=None, on_interrupt=None):
+    handler = InputHandler(widget, config, on_audio=on_audio, on_interrupt=on_interrupt)
     handler.start()
     return handler

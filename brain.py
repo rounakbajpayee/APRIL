@@ -103,17 +103,26 @@ def _local_reply(text: str, config: dict[str, Any]) -> str:
             return f"I'm using the Ollama model {model}."
         return "I don't have a configured Ollama model right now."
 
+    if "joke" in lowered:
+        return "Why did the scarecrow win an award? Because he was outstanding in his field."
+
     return ""
 
 
 def _looks_like_time_question(lowered: str) -> bool:
+    if "time" not in lowered:
+        return False
     time_markers = [
         "what time is it",
         "tell me the time",
         "current time",
         "time right now",
+        "what's the time",
+        "what is the time",
     ]
-    return any(marker in lowered for marker in time_markers)
+    if any(marker in lowered for marker in time_markers):
+        return True
+    return ("what" in lowered or "tell" in lowered) and "time" in lowered
 
 
 def _load_prompt_files(config: dict[str, Any]) -> str:

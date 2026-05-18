@@ -7,16 +7,20 @@ Build order: widget ✓ → input_handler → stt → brain → tts → sessions
 import json
 import os
 import sys
+import threading
 
 from brain import respond as respond_with_brain
+from debug_log import log_event
 from stt import transcribe
-from tts import speak as speak_reply
+from tts import speak as speak_reply, stop as stop_speaking
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
 BASE_DIR     = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH  = os.path.join(BASE_DIR, "config.json")
 DEFAULT_PATH = os.path.join(BASE_DIR, "config_defaults.json")
+_request_lock = threading.Lock()
+_latest_request_id = 0
 
 
 def load_config() -> dict:
@@ -72,17 +76,41 @@ def on_config_change(key, value):
     # if key == "voice": tts.handle_voice_change(value)
 
 
+def begin_interruptible_request(source: str) -> int:
+    global _latest_request_id
+    with _request_lock:
+        _latest_request_id += 1
+        request_id = _latest_request_id
+    stop_speaking()
+    log_event("request_begin", source=source, request_id=request_id)
+    return request_id
+
+
+def interrupt_current_request(source: str = "interrupt") -> int:
+    return begin_interruptible_request(source)
+
+
+def is_request_current(request_id: int) -> bool:
+    with _request_lock:
+        return request_id == _latest_request_id
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
-def handle_user_text(text: str, source: str = "text"):
+def handle_user_text(text: str, source: str = "text", request_id: int | None = None):
     """
     Shared text entry point for typed input and future STT transcripts.
     """
     print(f"[main] user text ({source}): {text}")
+    log_event("user_text", source=source, text=text, request_id=request_id)
     config = load_config()
     response = respond_with_brain(text, config)
+    if request_id is not None and not is_request_current(request_id):
+        log_event("response_discarded", source=source, text=text, response=response, request_id=request_id)
+        return ""
     if response.strip():
         print(f"[main] assistant response: {response}")
+        log_event("assistant_response", source=source, response=response, request_id=request_id)
         speak_reply(response, config)
         return response
     if source == "voice":
@@ -95,23 +123,28 @@ def on_text_submit(text: str):
     Called when the widget text panel submits a message.
     Stub for now - the real assistant pipeline will route this like transcribed speech.
     """
-    return handle_user_text(text, source="text")
+    request_id = begin_interruptible_request("text")
+    return handle_user_text(text, source="text", request_id=request_id)
 
 
 def on_audio_captured(audio_bytes: bytes, duration: float):
     """
     Called when the Copilot-key audio handler captures a WAV payload.
     """
+    request_id = begin_interruptible_request("voice")
     size_kb = len(audio_bytes) / 1024
     print(f"[main] audio captured: {duration:.2f}s, {size_kb:.1f} KiB WAV")
+    log_event("audio_captured", duration=duration, size_kb=round(size_kb, 1), request_id=request_id)
     config = load_config()
     transcript = transcribe(audio_bytes, config)
     if not transcript.strip():
         print("[main] transcription unavailable")
+        log_event("transcription_unavailable", request_id=request_id)
         return "I captured that, but I couldn't transcribe it."
 
     print(f"[main] transcript: {transcript}")
-    return handle_user_text(transcript, source="voice")
+    log_event("transcript", transcript=transcript, request_id=request_id)
+    return handle_user_text(transcript, source="voice", request_id=request_id)
 
 
 def main():
@@ -125,7 +158,7 @@ def main():
     print("[main] widget started — APRIL is idle")
     # Subsystem init will go here between load_config and widget.run():
     from input_handler import start as start_input_handler
-    input_handler = start_input_handler(widget, config, on_audio=on_audio_captured)
+    input_handler = start_input_handler(widget, config, on_audio=on_audio_captured, on_interrupt=interrupt_current_request)
     # if config["voice"] and config["at_home"]: tts.open_mac_channel(config)
     # etc.
 
