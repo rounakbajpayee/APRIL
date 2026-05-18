@@ -28,6 +28,8 @@ def handle(action: dict[str, Any], config: dict[str, Any], context: dict[str, An
         return {
             "reply": "I understood that as a shell request, but I still need a clearer command.",
             "config_changed": False,
+            "ok": False,
+            "error_kind": "shell_command_missing",
         }
 
     result = execute(node, command, config, timeout=int(config.get("shell_timeout_seconds", 20)))
@@ -35,14 +37,25 @@ def handle(action: dict[str, Any], config: dict[str, Any], context: dict[str, An
     target = describe_node(node)
 
     if not result.get("ok"):
+        error_kind = "shell_timeout" if int(result.get("returncode", 0) or 0) == 124 else "shell_failed"
         if output:
-            return {"reply": f"The command on {target} failed: {output}", "config_changed": False}
-        return {"reply": f"The command on {target} failed.", "config_changed": False}
+            return {
+                "reply": f"The command on {target} failed: {output}",
+                "config_changed": False,
+                "ok": False,
+                "error_kind": error_kind,
+            }
+        return {
+            "reply": f"The command on {target} failed.",
+            "config_changed": False,
+            "ok": False,
+            "error_kind": error_kind,
+        }
 
     summary = summarize_output(output, original_text or command, config)
     if node == "local":
-        return {"reply": summary, "config_changed": False}
-    return {"reply": f"On {target}, {summary}", "config_changed": False}
+        return {"reply": summary, "config_changed": False, "ok": True}
+    return {"reply": f"On {target}, {summary}", "config_changed": False, "ok": True}
 
 
 def infer_command(text: str, node: str) -> str:

@@ -16,29 +16,34 @@ def handle(action: dict[str, Any], _config: dict[str, Any], context: dict[str, A
     if mode == "open_url":
         url = str(action.get("url", "") or "").strip()
         if not url:
-            return {"reply": "I need a URL to open.", "config_changed": False}
+            return {"reply": "I need a URL to open.", "config_changed": False, "ok": False, "error_kind": "browser_url_missing"}
         _open_visible(url)
-        return {"reply": f"Opening {url}.", "config_changed": False}
+        return {"reply": f"Opening {url}.", "config_changed": False, "ok": True}
 
     if mode == "search_youtube":
         query = str(action.get("query", "") or "").strip()
         if not query:
-            return {"reply": "I need a YouTube search query.", "config_changed": False}
+            return {"reply": "I need a YouTube search query.", "config_changed": False, "ok": False, "error_kind": "browser_query_missing"}
         url = "https://www.youtube.com/results?search_query=" + urllib.parse.quote(query)
         _open_visible(url)
-        return {"reply": f"Searching YouTube for {query}.", "config_changed": False}
+        return {"reply": f"Searching YouTube for {query}.", "config_changed": False, "ok": True}
 
     if mode == "search_web":
         query = str(action.get("query", "") or "").strip()
         if not query:
             query = str((context or {}).get("text", "") or "").strip()
         if not query:
-            return {"reply": "I need a web search query.", "config_changed": False}
+            return {"reply": "I need a web search query.", "config_changed": False, "ok": False, "error_kind": "browser_query_missing"}
         url = "https://www.google.com/search?q=" + urllib.parse.quote(query)
         _open_visible(url)
-        return {"reply": f"Searching the web for {query}.", "config_changed": False}
+        return {"reply": f"Searching the web for {query}.", "config_changed": False, "ok": True}
 
-    return {"reply": "I understood that as a browser request, but I couldn't map the action yet.", "config_changed": False}
+    return {
+        "reply": "I understood that as a browser request, but I couldn't map the action yet.",
+        "config_changed": False,
+        "ok": False,
+        "error_kind": "browser_unmapped_action",
+    }
 
 
 def _open_visible(url: str) -> None:

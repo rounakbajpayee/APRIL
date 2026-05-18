@@ -13,6 +13,7 @@ def handle(action: dict[str, Any], config: dict[str, Any], context: dict[str, An
     context = context or {}
     if str(action.get("mode", "") or "").strip().lower() == "direct_reply":
         reply = str(action.get("reply", "") or "").strip()
-        return {"reply": reply, "config_changed": False}
+        return {"reply": reply, "config_changed": False, "ok": bool(reply)}
     text = str(action.get("text") or context.get("text") or "").strip()
-    return {"reply": respond(text, config), "config_changed": False}
+    reply = respond(text, config)
+    return {"reply": reply, "config_changed": False, "ok": bool(reply)}

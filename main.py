@@ -99,9 +99,19 @@ def record_state_event(
 def begin_interruptible_request(source: str) -> int:
     global _latest_request_id
     with _request_lock:
+        previous_request_id = _latest_request_id if _latest_request_id > 0 else None
         _latest_request_id += 1
         request_id = _latest_request_id
     stop_speaking()
+    if previous_request_id is not None:
+        record_state_event(
+            "request_interrupted",
+            source=source,
+            state="updated",
+            entity_id=f"request_{previous_request_id}",
+            payload={"source": source, "request_id": previous_request_id, "replaced_by_request_id": request_id},
+            config=load_config(),
+        )
     log_event("request_begin", source=source, request_id=request_id)
     record_state_event(
         "request_started",
@@ -161,6 +171,14 @@ def handle_user_text(text: str, source: str = "text", request_id: int | None = N
     )
     if request_id is not None and not is_request_current(request_id):
         log_event("response_discarded", source=source, text=text, response="", request_id=request_id)
+        record_state_event(
+            "response_discarded",
+            source=source,
+            state="updated",
+            entity_id=f"request_{request_id}",
+            payload={"source": source, "request_id": request_id, "text": text},
+            config=config,
+        )
         return ""
 
     result = execute_plan(
@@ -173,19 +191,21 @@ def handle_user_text(text: str, source: str = "text", request_id: int | None = N
         },
     )
     response = str(result.get("reply", "") or "").strip()
+    ok = bool(result.get("ok", bool(response)))
+    error_kind = str(result.get("error_kind", "") or "").strip()
     log_event(
         "action_result",
         source=source,
         request_id=request_id,
         intent=plan.get("intent"),
-        ok=bool(response),
+        ok=ok,
         reply=response,
         config_changed=bool(result.get("config_changed")),
     )
     record_state_event(
-        "action_completed" if response else "action_failed",
+        "action_completed" if ok else "action_failed",
         source=source,
-        state="completed" if response else "failed",
+        state="completed" if ok else "failed",
         entity_id=f"request_{request_id}" if request_id is not None else None,
         payload={
             "source": source,
@@ -193,12 +213,22 @@ def handle_user_text(text: str, source: str = "text", request_id: int | None = N
             "text": text,
             "intent": plan.get("intent"),
             "reply": response,
+            "ok": ok,
+            "error_kind": error_kind,
             "config_changed": bool(result.get("config_changed")),
         },
         config=config,
     )
     if request_id is not None and not is_request_current(request_id):
         log_event("response_discarded", source=source, text=text, response=response, request_id=request_id)
+        record_state_event(
+            "response_discarded",
+            source=source,
+            state="updated",
+            entity_id=f"request_{request_id}",
+            payload={"source": source, "request_id": request_id, "text": text, "response": response},
+            config=config,
+        )
         return ""
 
     if result.get("config_changed"):

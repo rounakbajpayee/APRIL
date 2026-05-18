@@ -29,5 +29,16 @@ def execute_plan(plan: dict[str, Any], config: dict[str, Any], context: dict[str
         return shell.handle(action, config, context=context)
     if intent == "vision":
         question = str(action.get("question") or action.get("text") or context.get("text") or "").strip()
-        return {"reply": capture_and_query(question, config), "config_changed": False}
+        reply = capture_and_query(question, config)
+        lowered = str(reply or "").lower()
+        ok = not any(
+            marker in lowered
+            for marker in ("not configured yet", "dependencies are not installed", "couldn't capture", "request failed")
+        )
+        return {
+            "reply": reply,
+            "config_changed": False,
+            "ok": ok,
+            "error_kind": None if ok else "vision_failed",
+        }
     return conversation.handle(action, config, context=context)

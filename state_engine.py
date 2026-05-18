@@ -84,6 +84,7 @@ def build_context_snapshot(events: list[dict[str, Any]], config: dict[str, Any] 
             open_loops.append("Transcription was unavailable.")
             if current_request and request_id == current_request.get("request_id"):
                 current_request["failed"] = "transcript_unavailable"
+                current_request = None
         elif event_type == "intent_planned":
             intent = str(payload.get("intent", "") or "").strip()
             if intent:
@@ -105,12 +106,20 @@ def build_context_snapshot(events: list[dict[str, Any]], config: dict[str, Any] 
             if current_request and request_id == current_request.get("request_id"):
                 current_request["failed"] = detail or "action_failed"
                 current_request = None
+        elif event_type == "request_interrupted":
+            current_status = "idle"
+            if current_request and request_id == current_request.get("request_id"):
+                current_request = None
+            open_loops.append("A request was interrupted by a newer request.")
         elif event_type == "assistant_replied":
             current_status = "idle"
             reply = str(payload.get("response", "") or "").strip()
             if reply:
                 if not recent_replies or recent_replies[-1] != reply:
                     recent_replies.append(reply)
+            if current_request and request_id == current_request.get("request_id"):
+                current_request = None
+        elif event_type == "response_discarded":
             if current_request and request_id == current_request.get("request_id"):
                 current_request = None
         elif event_type == "config_changed":
@@ -316,9 +325,13 @@ def _event_summary(event: dict[str, Any]) -> str:
     if event_type == "action_failed":
         reply = str(payload.get("reply", "") or payload.get("error", "") or "").strip()
         return f"Action failed: {reply}" if reply else "Action failed."
+    if event_type == "request_interrupted":
+        return "Request interrupted by a newer request."
     if event_type == "assistant_replied":
         response = str(payload.get("response", "") or "").strip()
         return f"Replied: {response}" if response else ""
+    if event_type == "response_discarded":
+        return "Discarded an outdated response."
     if event_type == "config_changed":
         updates = payload.get("updates", {})
         if isinstance(updates, dict) and updates:

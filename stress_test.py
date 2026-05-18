@@ -256,6 +256,83 @@ class AprilStressTests(unittest.TestCase):
         snapshot = state_engine.load_snapshot()
         self.assertEqual(snapshot.get("desktop_state", {}).get("active_app"), "YouTube")
 
+    def test_interrupted_request_is_cleared_from_projection(self):
+        event_ledger.append_event("april_started", source="system", state="started", entity_id="april_runtime")
+        event_ledger.append_event(
+            "request_started",
+            source="voice",
+            state="started",
+            entity_id="request_9",
+            payload={"request_id": 9, "source": "voice"},
+        )
+        event_ledger.append_event(
+            "request_interrupted",
+            source="text",
+            state="updated",
+            entity_id="request_9",
+            payload={"request_id": 9, "replaced_by_request_id": 10, "source": "text"},
+        )
+
+        snapshot = state_engine.refresh_state_snapshot(config=self.config)
+        self.assertIsNone(snapshot["current_state"]["active_request"])
+        self.assertIn("A request was interrupted by a newer request.", snapshot["open_loops"])
+
+    def test_shell_timeout_is_projected_as_failure(self):
+        with mock.patch(
+            "intent.shell.execute",
+            return_value={
+                "ok": False,
+                "node": "local",
+                "command": "sleep",
+                "output": "Command timed out after 20 seconds.",
+                "returncode": 124,
+            },
+        ):
+            result = execute_plan(
+                {"intent": "shell", "action": {"mode": "command", "node": "local", "command": "sleep", "text": "run sleep"}},
+                self.config,
+                context={"text": "run sleep"},
+            )
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error_kind"], "shell_timeout")
+
+    def test_main_records_failure_and_discard_events(self):
+        with (
+            mock.patch("main.collect_runtime_observation", return_value={"foreground": {"window_title": "Codex", "app_hint": "Codex"}}),
+            mock.patch(
+                "main.execute_plan",
+                return_value={
+                    "reply": "Vision request failed: API unavailable.",
+                    "config_changed": False,
+                    "ok": False,
+                    "error_kind": "vision_failed",
+                },
+            ),
+        ):
+            request_id = main.begin_interruptible_request("text")
+            reply = main.handle_user_text("what's on my screen", source="text", request_id=request_id)
+            self.assertIn("Vision request failed", reply)
+
+        events = event_ledger.read_events(limit=20)
+        self.assertTrue(any(event.get("event_type") == "action_failed" for event in events))
+
+        event_ledger.append_event(
+            "request_started",
+            source="text",
+            state="started",
+            entity_id="request_20",
+            payload={"request_id": 20, "source": "text"},
+        )
+        event_ledger.append_event(
+            "response_discarded",
+            source="text",
+            state="updated",
+            entity_id="request_20",
+            payload={"request_id": 20, "source": "text"},
+        )
+        snapshot = state_engine.refresh_state_snapshot(config=self.config)
+        self.assertIsNone(snapshot["current_state"]["active_request"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
