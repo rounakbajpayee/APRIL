@@ -15,6 +15,7 @@ import tkinter as tk
 import tkinter.font as tkfont
 
 from debug_log import read_recent_events
+from state_engine import get_widget_snapshot_lines
 
 
 gdi32 = ctypes.windll.gdi32
@@ -77,6 +78,7 @@ CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
 HISTORY_PATH = os.path.join(os.path.dirname(__file__), "logs", "ui_history.json")
 MAX_HISTORY_ITEMS = 40
 RECENT_DEBUG_EVENTS = 10
+RECENT_SNAPSHOT_LINES = 8
 
 BG = "#111214"
 TRANSPARENT = "#010203"
@@ -214,7 +216,7 @@ class APRILWidget:
         )
         self.panel_mode = tk.Label(
             self.panel_frame,
-            text="TEXT",
+            text="CONTEXT",
             bg="#1d242b",
             fg="#8fb4d8",
             font=self.font_node,
@@ -387,8 +389,18 @@ class APRILWidget:
     def _seed_debug_console_if_needed(self):
         if self._history:
             return
+        snapshot_lines = get_widget_snapshot_lines(limit=RECENT_SNAPSHOT_LINES)
+        for role, text in snapshot_lines:
+            self._history.append((role, text))
         debug_events = read_recent_events(limit=RECENT_DEBUG_EVENTS)
         if not debug_events:
+            if self._history:
+                self._history = self._history[-MAX_HISTORY_ITEMS:]
+                self._render_history()
+                try:
+                    self._save_history()
+                except Exception:
+                    pass
             return
         for event in debug_events:
             summary = self._format_debug_event(event)
@@ -417,7 +429,22 @@ class APRILWidget:
         if event_type == "request_begin":
             source = str(event.get("source", "") or "").strip() or "unknown"
             return f"Request started from {source}."
+        if event_type == "action_result":
+            reply = str(event.get("reply", "") or "").strip()
+            if reply:
+                return f"Action: {reply}"
         return ""
+
+    def refresh_context_view(self):
+        def apply_refresh():
+            self._history.clear()
+            self._load_persisted_history()
+            if not self._history:
+                self._seed_debug_console_if_needed()
+            else:
+                self._render_history()
+
+        self.root.after(0, apply_refresh)
 
     def _measure_layout(self):
         if self._text_panel_active():
@@ -965,6 +992,8 @@ class APRILWidget:
 
         term_label = "Terminal: SHOW" if self.config.get("terminal_visible", True) else "Terminal: HIDE"
         menu.add_command(label=term_label, command=self._toggle_terminal)
+        if self._text_panel_active():
+            menu.add_command(label="Refresh Context", command=self.refresh_context_view)
 
         menu.add_separator()
         menu.add_command(label="Quit APRIL", command=self._quit)

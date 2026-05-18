@@ -207,6 +207,45 @@ def get_prompt_context_summary(limit: int = 8) -> str:
     return "\n".join(lines).strip()
 
 
+def get_widget_snapshot_lines(limit: int = 6) -> list[tuple[str, str]]:
+    snapshot = load_snapshot()
+    if not snapshot:
+        snapshot = refresh_state_snapshot()
+    if not snapshot:
+        return []
+
+    lines: list[tuple[str, str]] = []
+    current_state = snapshot.get("current_state", {}) if isinstance(snapshot, dict) else {}
+    status = str(current_state.get("status", "") or "").strip()
+    active_app = str(current_state.get("active_app", "") or "").strip()
+    active_window = str(current_state.get("active_window", "") or "").strip()
+    timeline = snapshot.get("recent_timeline", []) if isinstance(snapshot, dict) else []
+    open_loops = snapshot.get("open_loops", []) if isinstance(snapshot, dict) else []
+
+    if status:
+        lines.append(("system", f"State: {status}"))
+    if active_app or active_window:
+        lines.append(("system", f"Focus: {active_app or active_window}"))
+    for item in timeline[-limit:]:
+        if not isinstance(item, dict):
+            continue
+        summary = str(item.get("summary", "") or "").strip()
+        if summary:
+            lines.append(("system", summary))
+    for item in open_loops[-3:]:
+        lines.append(("system", f"Open loop: {item}"))
+
+    deduped: list[tuple[str, str]] = []
+    seen = set()
+    for role, text in lines:
+        key = (role, text)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append((role, text))
+    return deduped[-max(limit + 2, 4):]
+
+
 def _event_summary(event: dict[str, Any]) -> str:
     event_type = str(event.get("event_type", "") or "").strip()
     payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}

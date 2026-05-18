@@ -169,6 +169,9 @@ class AprilStressTests(unittest.TestCase):
         self.assertIn("open youtube", json.dumps(snapshot))
         self.assertIn("APRIL runtime context:", summary)
         self.assertIn("Planned browser action.", summary)
+        widget_lines = state_engine.get_widget_snapshot_lines(limit=5)
+        self.assertTrue(any("State:" in text for _role, text in widget_lines))
+        self.assertTrue(any("Planned browser action." in text for _role, text in widget_lines))
 
     def test_execution_dispatch_survives_mixed_workload(self):
         requests = [
