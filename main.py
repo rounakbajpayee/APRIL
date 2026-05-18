@@ -8,6 +8,7 @@ import json
 import os
 import sys
 
+from brain import respond as respond_with_brain
 from stt import transcribe
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -77,9 +78,13 @@ def handle_user_text(text: str, source: str = "text"):
     Shared text entry point for typed input and future STT transcripts.
     """
     print(f"[main] user text ({source}): {text}")
+    config = load_config()
+    response = respond_with_brain(text, config)
+    if response.strip():
+        return response
     if source == "voice":
         return f"Heard: {text}"
-    return "APRIL heard you. Brain pipeline next."
+    return "I heard you, but I do not have a reply yet."
 
 
 def on_text_submit(text: str):

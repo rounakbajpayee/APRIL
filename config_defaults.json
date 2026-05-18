@@ -6,6 +6,8 @@
   "active_sessions": [],
   "ollama_host": "http://192.168.0.234:11434",
   "ollama_model": "gemma4:e2b",
+  "brain_timeout_seconds": 30,
+  "brain_system_prompt": "",
   "stt_mode": "local_first",
   "stt_local_model": "small.en",
   "stt_language": "en",
