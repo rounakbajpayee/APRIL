@@ -7,3 +7,5 @@ pycaw
 screen-brightness-control
 requests
 google-generativeai
+openai-whisper
+imageio-ffmpeg

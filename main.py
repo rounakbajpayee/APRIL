@@ -77,7 +77,9 @@ def handle_user_text(text: str, source: str = "text"):
     Shared text entry point for typed input and future STT transcripts.
     """
     print(f"[main] user text ({source}): {text}")
-    return "APRIL heard you. The brain pipeline will attach here next."
+    if source == "voice":
+        return f"Heard: {text}"
+    return "APRIL heard you. Brain pipeline next."
 
 
 def on_text_submit(text: str):
