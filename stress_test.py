@@ -172,6 +172,11 @@ class AprilStressTests(unittest.TestCase):
         widget_lines = state_engine.get_widget_snapshot_lines(limit=5)
         self.assertTrue(any("State:" in text for _role, text in widget_lines))
         self.assertTrue(any("Planned browser action." in text for _role, text in widget_lines))
+        widget_data = state_engine.get_widget_snapshot_data(limit=5)
+        self.assertEqual(widget_data["status"], "idle")
+        self.assertEqual(widget_data["focus"], "Notes")
+        self.assertEqual(widget_data["last_transcript"], "open youtube")
+        self.assertIn("Opening https://www.youtube.com.", widget_data["last_reply"])
 
     def test_execution_dispatch_survives_mixed_workload(self):
         requests = [

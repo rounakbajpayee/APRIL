@@ -246,6 +246,37 @@ def get_widget_snapshot_lines(limit: int = 6) -> list[tuple[str, str]]:
     return deduped[-max(limit + 2, 4):]
 
 
+def get_widget_snapshot_data(limit: int = 6) -> dict[str, Any]:
+    snapshot = load_snapshot()
+    if not snapshot:
+        snapshot = refresh_state_snapshot()
+    if not snapshot:
+        return {}
+
+    current_state = snapshot.get("current_state", {}) if isinstance(snapshot, dict) else {}
+    domain_summaries = snapshot.get("domain_summaries", {}) if isinstance(snapshot, dict) else {}
+    april_summary = domain_summaries.get("april", {}) if isinstance(domain_summaries, dict) else {}
+    timeline = snapshot.get("recent_timeline", []) if isinstance(snapshot, dict) else []
+    open_loops = snapshot.get("open_loops", []) if isinstance(snapshot, dict) else []
+
+    recent_transcripts = april_summary.get("recent_transcripts", []) if isinstance(april_summary, dict) else []
+    recent_replies = april_summary.get("recent_replies", []) if isinstance(april_summary, dict) else []
+
+    return {
+        "status": str(current_state.get("status", "") or "").strip() or "unknown",
+        "focus": str(current_state.get("active_app", "") or current_state.get("active_window", "") or "").strip(),
+        "active_window": str(current_state.get("active_window", "") or "").strip(),
+        "last_transcript": str(recent_transcripts[-1] if recent_transcripts else "").strip(),
+        "last_reply": str(recent_replies[-1] if recent_replies else "").strip(),
+        "open_loops": [str(item).strip() for item in open_loops[-3:] if str(item).strip()],
+        "timeline": [
+            str(item.get("summary", "") or "").strip()
+            for item in timeline[-limit:]
+            if isinstance(item, dict) and str(item.get("summary", "") or "").strip()
+        ],
+    }
+
+
 def _event_summary(event: dict[str, Any]) -> str:
     event_type = str(event.get("event_type", "") or "").strip()
     payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}

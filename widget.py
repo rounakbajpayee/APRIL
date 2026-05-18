@@ -15,7 +15,7 @@ import tkinter as tk
 import tkinter.font as tkfont
 
 from debug_log import read_recent_events
-from state_engine import get_widget_snapshot_lines
+from state_engine import get_widget_snapshot_data, get_widget_snapshot_lines
 
 
 gdi32 = ctypes.windll.gdi32
@@ -112,12 +112,19 @@ AUTO_COLLAPSE_MS = 7000
 MESSAGE_HOLD_MS = 9000
 COLLAPSED_SIZE = 46
 PANEL_WIDTH = 392
-PANEL_HEIGHT = 292
+PANEL_HEIGHT = 378
 PANEL_PAD = 16
 PANEL_RADIUS = 26
 PANEL_HEADER_H = 38
 PANEL_INPUT_H = 36
 PANEL_GAP = 10
+CARD_GAP = 8
+CARD_HEIGHT = 58
+CARD_LABEL = "#7d8996"
+CARD_VALUE = "#f4f6f8"
+CARD_BG = "#16191d"
+CARD_BORDER = "#2b3138"
+TIMELINE_BG = "#14171b"
 
 
 class APRILWidget:
@@ -238,9 +245,48 @@ class APRILWidget:
             cursor="hand2",
         )
 
+        self.summary_frame = tk.Frame(self.panel_frame, bg=PANEL_BG, bd=0, highlightthickness=0)
+        self.card_status = self._make_summary_card("STATE")
+        self.card_focus = self._make_summary_card("FOCUS")
+        self.card_transcript = self._make_summary_card("LAST HEARD")
+        self.card_reply = self._make_summary_card("LAST REPLY")
+
+        self.open_loops_label = tk.Label(
+            self.panel_frame,
+            text="OPEN LOOPS",
+            bg=PANEL_BG,
+            fg=CARD_LABEL,
+            font=self.font_node,
+            anchor="w",
+        )
+        self.open_loops_text = tk.Label(
+            self.panel_frame,
+            text="None.",
+            bg=TIMELINE_BG,
+            fg=TEXT,
+            justify="left",
+            anchor="nw",
+            font=self.font_panel,
+            padx=10,
+            pady=8,
+            bd=0,
+            highlightthickness=1,
+            highlightbackground=FIELD_BORDER,
+            wraplength=320,
+        )
+
+        self.timeline_label = tk.Label(
+            self.panel_frame,
+            text="TIMELINE",
+            bg=PANEL_BG,
+            fg=CARD_LABEL,
+            font=self.font_node,
+            anchor="w",
+        )
+
         self.output_text = tk.Text(
             self.panel_frame,
-            bg=FIELD_BG,
+            bg=TIMELINE_BG,
             fg=TEXT,
             insertbackground=TEXT,
             selectbackground="#2d4158",
@@ -297,9 +343,54 @@ class APRILWidget:
         self.input_entry.bind("<Escape>", lambda _event: self._collapse_text_panel())
         self.input_var.trace_add("write", lambda *_args: self._sync_send_state())
         self._sync_send_state()
-        for widget in (self.panel_frame, self.panel_title, self.panel_mode, self.panel_close, self.output_text, self.input_entry, self.send_button):
+        for widget in (
+            self.panel_frame,
+            self.panel_title,
+            self.panel_mode,
+            self.panel_close,
+            self.summary_frame,
+            self.open_loops_label,
+            self.open_loops_text,
+            self.timeline_label,
+            self.output_text,
+            self.input_entry,
+            self.send_button,
+        ):
             widget.bind("<Enter>", self._on_hover_enter)
             widget.bind("<Leave>", self._on_hover_leave)
+
+    def _make_summary_card(self, label_text):
+        card = tk.Frame(
+            self.summary_frame,
+            bg=CARD_BG,
+            bd=0,
+            highlightthickness=1,
+            highlightbackground=CARD_BORDER,
+        )
+        label = tk.Label(
+            card,
+            text=label_text,
+            bg=CARD_BG,
+            fg=CARD_LABEL,
+            font=self.font_node,
+            anchor="w",
+        )
+        value = tk.Label(
+            card,
+            text="--",
+            bg=CARD_BG,
+            fg=CARD_VALUE,
+            font=self.font_panel_bold,
+            anchor="w",
+            justify="left",
+            wraplength=140,
+        )
+        label.place(x=10, y=8, width=120, height=14)
+        value.place(x=10, y=24, width=142, height=24)
+        for widget in (card, label, value):
+            widget.bind("<Enter>", self._on_hover_enter)
+            widget.bind("<Leave>", self._on_hover_leave)
+        return {"frame": card, "label": label, "value": value}
 
     def _ellipsize(self, text, font, max_width):
         if not text or font.measure(text) <= max_width:
@@ -389,6 +480,7 @@ class APRILWidget:
     def _seed_debug_console_if_needed(self):
         if self._history:
             return
+        self._refresh_summary_cards()
         snapshot_lines = get_widget_snapshot_lines(limit=RECENT_SNAPSHOT_LINES)
         for role, text in snapshot_lines:
             self._history.append((role, text))
@@ -438,13 +530,37 @@ class APRILWidget:
     def refresh_context_view(self):
         def apply_refresh():
             self._history.clear()
-            self._load_persisted_history()
-            if not self._history:
-                self._seed_debug_console_if_needed()
-            else:
-                self._render_history()
+            self._refresh_summary_cards()
+            self._seed_debug_console_if_needed()
 
         self.root.after(0, apply_refresh)
+
+    def _refresh_summary_cards(self):
+        snapshot = get_widget_snapshot_data(limit=6)
+        if not snapshot:
+            self._set_card_value(self.card_status, "--")
+            self._set_card_value(self.card_focus, "--")
+            self._set_card_value(self.card_transcript, "--")
+            self._set_card_value(self.card_reply, "--")
+            self.open_loops_text.config(text="None.")
+            return
+
+        self._set_card_value(self.card_status, str(snapshot.get("status", "--") or "--").upper())
+        focus = str(snapshot.get("focus", "") or snapshot.get("active_window", "") or "").strip() or "No active app"
+        transcript = str(snapshot.get("last_transcript", "") or "").strip() or "Nothing heard yet"
+        reply = str(snapshot.get("last_reply", "") or "").strip() or "No reply yet"
+        self._set_card_value(self.card_focus, focus)
+        self._set_card_value(self.card_transcript, transcript)
+        self._set_card_value(self.card_reply, reply)
+
+        open_loops = snapshot.get("open_loops", [])
+        if isinstance(open_loops, list) and open_loops:
+            self.open_loops_text.config(text="\n".join(f"- {item}" for item in open_loops))
+        else:
+            self.open_loops_text.config(text="None.")
+
+    def _set_card_value(self, card, text):
+        card["value"].config(text=self._ellipsize(str(text or ""), self.font_panel_bold, 142))
 
     def _measure_layout(self):
         if self._text_panel_active():
@@ -642,9 +758,21 @@ class APRILWidget:
         self.panel_title.place(x=inner_x, y=header_y + 5, width=120, height=24)
         self.panel_mode.place(x=frame_w - PANEL_PAD - 58, y=header_y + 7, width=58, height=22)
         self.panel_close.place(x=frame_w - PANEL_PAD - 94, y=header_y + 4, width=28, height=28)
-        self.output_text.place(x=inner_x, y=output_y, width=inner_w, height=output_h)
+        self.summary_frame.place(x=inner_x, y=output_y, width=inner_w, height=(CARD_HEIGHT * 2) + CARD_GAP)
+        card_w = max(120, (inner_w - CARD_GAP) // 2)
+        self.card_status["frame"].place(x=0, y=0, width=card_w, height=CARD_HEIGHT)
+        self.card_focus["frame"].place(x=card_w + CARD_GAP, y=0, width=inner_w - card_w - CARD_GAP, height=CARD_HEIGHT)
+        self.card_transcript["frame"].place(x=0, y=CARD_HEIGHT + CARD_GAP, width=card_w, height=CARD_HEIGHT)
+        self.card_reply["frame"].place(x=card_w + CARD_GAP, y=CARD_HEIGHT + CARD_GAP, width=inner_w - card_w - CARD_GAP, height=CARD_HEIGHT)
+        loops_y = output_y + (CARD_HEIGHT * 2) + CARD_GAP + PANEL_GAP
+        self.open_loops_label.place(x=inner_x, y=loops_y, width=120, height=16)
+        self.open_loops_text.place(x=inner_x, y=loops_y + 18, width=inner_w, height=52)
+        timeline_y = loops_y + 18 + 52 + PANEL_GAP
+        self.timeline_label.place(x=inner_x, y=timeline_y, width=120, height=16)
+        self.output_text.place(x=inner_x, y=timeline_y + 18, width=inner_w, height=max(70, input_y - (timeline_y + 18) - PANEL_GAP))
         self.input_entry.place(x=inner_x, y=input_y, width=entry_w, height=PANEL_INPUT_H)
         self.send_button.place(x=inner_x + entry_w + PANEL_GAP, y=input_y, width=button_w, height=PANEL_INPUT_H)
+        self._refresh_summary_cards()
 
     def _hide_text_panel(self):
         if self.panel_frame.winfo_ismapped():
@@ -668,6 +796,7 @@ class APRILWidget:
             return
         self._history.append((role, clean))
         self._history = self._history[-MAX_HISTORY_ITEMS:]
+        self._refresh_summary_cards()
         self._render_history()
         try:
             self._save_history()
