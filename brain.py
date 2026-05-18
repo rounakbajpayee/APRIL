@@ -97,7 +97,7 @@ def _local_reply(text: str, config: dict[str, Any]) -> str:
         now = datetime.now().astimezone()
         return f"It's {now.strftime('%I:%M %p').lstrip('0')} on {now.strftime('%A, %B %d')}."
 
-    if "what model" in lowered and "using" in lowered:
+    if _looks_like_model_question(lowered):
         model = str(config.get("ollama_model", "") or "").strip()
         if model:
             return f"I'm using the Ollama model {model}."
@@ -123,6 +123,20 @@ def _looks_like_time_question(lowered: str) -> bool:
     if any(marker in lowered for marker in time_markers):
         return True
     return ("what" in lowered or "tell" in lowered) and "time" in lowered
+
+
+def _looks_like_model_question(lowered: str) -> bool:
+    if "using" not in lowered:
+        return False
+    markers = [
+        "what model",
+        "which model",
+        "what module",
+        "which module",
+        "model are you using",
+        "module are you using",
+    ]
+    return any(marker in lowered for marker in markers)
 
 
 def _load_prompt_files(config: dict[str, Any]) -> str:

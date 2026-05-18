@@ -245,6 +245,7 @@ class InputHandler:
         self.state = "idle"
         self.f23_down_time = None
         self.last_tap_time = None
+        self.trigger_down = False
         self.hold_threshold = float(config.get("copilot_hold_threshold", 0.3))
         self.double_tap_window = float(config.get("copilot_double_tap_window", 0.4))
         self.min_audio_seconds = float(config.get("copilot_min_audio_seconds", 0.5))
@@ -299,7 +300,11 @@ class InputHandler:
 
     def _handle_trigger_press(self):
         with self._lock:
+            if self.trigger_down:
+                return
+            self.trigger_down = True
             if self.state == "continuous_recording":
+                self.trigger_down = False
                 self._stop_recording(send=True)
                 return
             if self.state != "idle":
@@ -325,6 +330,9 @@ class InputHandler:
 
     def _handle_trigger_release(self):
         with self._lock:
+            if not self.trigger_down:
+                return
+            self.trigger_down = False
             if self.state != "recording_hold":
                 return
             now = time.monotonic()
@@ -347,6 +355,7 @@ class InputHandler:
         audio_bytes, duration = self.recorder.stop()
         self.state = "idle"
         self.f23_down_time = None
+        self.trigger_down = False
         if not send or duration < self.min_audio_seconds or not audio_bytes:
             self.widget.set_state("idle")
             return
