@@ -91,6 +91,7 @@ RADIUS = 30
 IDLE_MIN_WIDTH = 0
 MIN_WIDTH = 188
 MAX_WIDTH = 420
+MESSAGE_WRAP_WIDTH = 360
 ICON_SIZE = 24
 ICON_GAP = 10
 NODE_GAP = 12
@@ -101,6 +102,7 @@ ANCHOR_FROM_BOTTOM = 50
 ANIM_MS = 160
 ANIM_STEP_MS = 16
 AUTO_COLLAPSE_MS = 7000
+MESSAGE_HOLD_MS = 14000
 COLLAPSED_SIZE = 46
 PANEL_WIDTH = 392
 PANEL_HEIGHT = 292
@@ -123,6 +125,7 @@ class APRILWidget:
         self._pulse_job = None
         self._anim_job = None
         self._collapse_job = None
+        self._message_clear_job = None
         self._dot_id = None
         self._wave_ids = []
         self._wave_phase = 0
@@ -137,6 +140,7 @@ class APRILWidget:
         self._scale = 1.0
         self._panel_visible = False
         self._history = []
+        self._hovering = False
 
         self._build_window()
         self._build_fonts()
@@ -184,6 +188,8 @@ class APRILWidget:
         self.canvas.bind("<Button-3>", self._show_context_menu)
         self.canvas.bind("<Button-1>", self._drag_start)
         self.canvas.bind("<B1-Motion>", self._drag_motion)
+        self.canvas.bind("<Enter>", self._on_hover_enter)
+        self.canvas.bind("<Leave>", self._on_hover_leave)
 
     def _build_text_panel(self):
         self.panel_frame = tk.Frame(self.root, bg=PANEL_BG, bd=0, highlightthickness=0)
@@ -279,6 +285,9 @@ class APRILWidget:
         self.input_entry.bind("<Escape>", lambda _event: self._collapse_text_panel())
         self.input_var.trace_add("write", lambda *_args: self._sync_send_state())
         self._sync_send_state()
+        for widget in (self.panel_frame, self.panel_title, self.panel_mode, self.panel_close, self.output_text, self.input_entry, self.send_button):
+            widget.bind("<Enter>", self._on_hover_enter)
+            widget.bind("<Leave>", self._on_hover_leave)
 
     def _ellipsize(self, text, font, max_width):
         if not text or font.measure(text) <= max_width:
@@ -289,6 +298,42 @@ class APRILWidget:
         while trimmed and font.measure(trimmed) > available:
             trimmed = trimmed[:-1]
         return trimmed.rstrip() + ellipsis
+
+    def _wrap_text(self, text, font, max_width):
+        clean = " ".join(str(text).strip().split())
+        if not clean:
+            return "", 0, 0
+
+        lines = []
+        current = ""
+        for word in clean.split(" "):
+            candidate = word if not current else f"{current} {word}"
+            if font.measure(candidate) <= max_width:
+                current = candidate
+                continue
+            if current:
+                lines.append(current)
+                current = ""
+            if font.measure(word) <= max_width:
+                current = word
+                continue
+
+            chunk = ""
+            for char in word:
+                candidate = chunk + char
+                if chunk and font.measure(candidate) > max_width:
+                    lines.append(chunk)
+                    chunk = char
+                else:
+                    chunk = candidate
+            current = chunk
+
+        if current:
+            lines.append(current)
+
+        wrapped = "\n".join(lines)
+        width = max((font.measure(line) for line in lines), default=0)
+        return wrapped, width, len(lines)
 
     def _context_chip(self):
         if self._node:
@@ -322,7 +367,7 @@ class APRILWidget:
         state = STATES.get(self._state, STATES["idle"])
         label = state["label"]
         node = self._ellipsize(self._context_chip(), self.font_node, NODE_MAX_WIDTH)
-        message = self._ellipsize(self._message, self.font_msg, MAX_WIDTH - PAD_X * 2)
+        message, msg_row_w, msg_lines = self._wrap_text(self._message, self.font_msg, MESSAGE_WRAP_WIDTH)
 
         if self._collapsed and self._state == "idle" and not message:
             return {
@@ -345,9 +390,8 @@ class APRILWidget:
         node_w = nw + NODE_PAD_X * 2 if node else 0
 
         label_row_w = ICON_SIZE + ICON_GAP + lw + (NODE_GAP + node_w if node else 0)
-        msg_row_w = self.font_msg.measure(message) if message else 0
         content_w = max(label_row_w, msg_row_w)
-        content_h = lh + (MSG_GAP + mh if message else 0)
+        content_h = lh + (MSG_GAP + (mh * msg_lines) if message else 0)
 
         h = content_h + PAD_Y * 2
         radius = min(RADIUS, h // 2)
@@ -370,6 +414,7 @@ class APRILWidget:
             "nw": nw,
             "node_w": node_w,
             "label_row_w": label_row_w,
+            "msg_lines": msg_lines,
             "collapsed": False,
             "panel": False,
             "anchor": "center",
@@ -406,7 +451,7 @@ class APRILWidget:
             return
 
         label_cy = PAD_Y + layout["lh"] // 2
-        msg_cy = PAD_Y + layout["lh"] + MSG_GAP + layout["mh"] // 2
+        msg_top = PAD_Y + layout["lh"] + MSG_GAP
         row_x = (w - layout["label_row_w"]) / 2
         icon_cx = row_x + ICON_SIZE / 2
         text_x = row_x + ICON_SIZE + ICON_GAP
@@ -446,11 +491,13 @@ class APRILWidget:
         if layout["message"]:
             self.canvas.create_text(
                 w / 2,
-                msg_cy,
+                msg_top,
                 text=layout["message"],
                 font=self.font_msg,
                 fill=MUTED,
-                anchor="center",
+                anchor="n",
+                justify="center",
+                width=MESSAGE_WRAP_WIDTH,
             )
         self._display_w = w
         self._display_h = h
@@ -668,6 +715,9 @@ class APRILWidget:
         if self._collapse_job:
             self.root.after_cancel(self._collapse_job)
             self._collapse_job = None
+        if self._message_clear_job:
+            self.root.after_cancel(self._message_clear_job)
+            self._message_clear_job = None
         self._collapsed = False
         self._state = state
         self._message = message
@@ -683,7 +733,10 @@ class APRILWidget:
         if self._state in {"listening", "thinking", "speaking"}:
             self._pulse()
         elif self._state == "idle" and not self._text_panel_active():
-            self._schedule_collapse()
+            if self._message:
+                self._schedule_message_clear()
+            else:
+                self._schedule_collapse()
 
     def update_from_config(self):
         self.root.after(0, self._on_config_refresh)
@@ -692,12 +745,18 @@ class APRILWidget:
         if self._collapse_job:
             self.root.after_cancel(self._collapse_job)
             self._collapse_job = None
+        if self._message_clear_job:
+            self.root.after_cancel(self._message_clear_job)
+            self._message_clear_job = None
         self._collapsed = False
         self._redraw()
         if self._text_panel_active():
             self.root.after(120, self._focus_text_input)
         elif self._state == "idle":
-            self._schedule_collapse()
+            if self._message:
+                self._schedule_message_clear()
+            else:
+                self._schedule_collapse()
 
     def run(self):
         self.root.mainloop()
@@ -706,17 +765,32 @@ class APRILWidget:
         self.root.after(0, self.root.destroy)
 
     def _schedule_collapse(self):
-        if self._text_panel_active():
+        if self._text_panel_active() or self._hovering:
             return
         if self._collapse_job:
             self.root.after_cancel(self._collapse_job)
         self._collapse_job = self.root.after(AUTO_COLLAPSE_MS, self._collapse_idle)
+
+    def _schedule_message_clear(self):
+        if self._text_panel_active() or self._hovering:
+            return
+        if self._message_clear_job:
+            self.root.after_cancel(self._message_clear_job)
+        self._message_clear_job = self.root.after(MESSAGE_HOLD_MS, self._clear_idle_message)
 
     def _collapse_idle(self):
         self._collapse_job = None
         if self._state == "idle" and not self._message:
             self._collapsed = True
             self._redraw()
+
+    def _clear_idle_message(self):
+        self._message_clear_job = None
+        if self._hovering or self._state != "idle" or not self._message:
+            return
+        self._message = ""
+        self._redraw()
+        self._schedule_collapse()
 
     def _pulse(self):
         if self._state not in {"listening", "thinking", "speaking"}:
@@ -743,6 +817,32 @@ class APRILWidget:
         self._anchor_x = x + self.root.winfo_width() / 2
         self._anchor_y = y + self.root.winfo_height() / 2
         self._anchor_bottom_y = y + self.root.winfo_height()
+
+    def _on_hover_enter(self, _event=None):
+        self._hovering = True
+        if self._collapse_job:
+            self.root.after_cancel(self._collapse_job)
+            self._collapse_job = None
+        if self._message_clear_job:
+            self.root.after_cancel(self._message_clear_job)
+            self._message_clear_job = None
+
+    def _on_hover_leave(self, _event=None):
+        pointer_x = self.root.winfo_pointerx()
+        pointer_y = self.root.winfo_pointery()
+        root_x = self.root.winfo_rootx()
+        root_y = self.root.winfo_rooty()
+        root_w = self.root.winfo_width()
+        root_h = self.root.winfo_height()
+        inside = root_x <= pointer_x <= root_x + root_w and root_y <= pointer_y <= root_y + root_h
+        if inside:
+            return
+        self._hovering = False
+        if self._state == "idle":
+            if self._message:
+                self._schedule_message_clear()
+            else:
+                self._schedule_collapse()
 
     def _show_context_menu(self, event):
         if self._collapsed:

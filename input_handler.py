@@ -358,8 +358,10 @@ class InputHandler:
                 if response:
                     if hasattr(self.widget, "add_text_output"):
                         self.widget.add_text_output(response)
-                    self.widget.set_state("speaking", response[:80], node="local")
-                    time.sleep(1.2)
+                    self.widget.set_state("speaking", response, node="local")
+                    time.sleep(1.4)
+                    self.widget.set_state("idle", response, node="local")
+                    return
             else:
                 self.widget.set_state("speaking", "audio captured", node="local")
                 time.sleep(1.2)
