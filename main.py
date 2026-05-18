@@ -1,40 +1,44 @@
 """
-main.py — APRIL Entry Point (stub)
-Loads config, starts widget. All other subsystems stubbed for now.
-Build order: widget ✓ → input_handler → stt → brain → tts → sessions → intents
+main.py - APRIL entry point.
 """
 
+import ctypes
 import json
 import os
-import sys
 import threading
 
-from brain import respond as respond_with_brain
+from brain import process as plan_with_brain
 from debug_log import log_event
+from event_ledger import append_event
+from intent import execute_plan
+from memory import append_turn
+from observer import collect_runtime_observation
+from state_engine import refresh_state_snapshot
 from stt import transcribe
 from tts import speak as speak_reply, stop as stop_speaking
 
-# ── Config ────────────────────────────────────────────────────────────────────
 
-BASE_DIR     = os.path.dirname(os.path.abspath(__file__))
-CONFIG_PATH  = os.path.join(BASE_DIR, "config.json")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 DEFAULT_PATH = os.path.join(BASE_DIR, "config_defaults.json")
 _request_lock = threading.Lock()
 _latest_request_id = 0
+_widget_ref = None
+_single_instance_handle = None
+_SINGLE_INSTANCE_NAME = "Local\\APRILDesktopSingleton"
 
 
 def load_config() -> dict:
     config = {}
     if os.path.exists(DEFAULT_PATH):
-        with open(DEFAULT_PATH) as f:
+        with open(DEFAULT_PATH, encoding="utf-8") as f:
             config.update(json.load(f))
     if os.path.exists(CONFIG_PATH):
-        with open(CONFIG_PATH) as f:
+        with open(CONFIG_PATH, encoding="utf-8") as f:
             config.update(json.load(f))
         return config
     if config:
         return config
-    # Minimal fallback so widget can start
     return {
         "voice": True,
         "at_home": True,
@@ -55,25 +59,41 @@ def load_config() -> dict:
         "audio_sample_rate": 16000,
         "audio_channels": 1,
         "audio_chunk_size": 1024,
+        "memory_context_turns": 6,
+        "shell_timeout_seconds": 20,
         "copilot_hold_threshold": 0.3,
         "copilot_double_tap_window": 0.4,
         "copilot_min_audio_seconds": 0.5,
         "suppress_copilot": False,
+        "widget_anchor_x": None,
+        "widget_anchor_y": None,
+        "widget_anchor_bottom_y": None,
     }
 
 
-# ── Config change handler (called by widget context menu) ─────────────────────
-
 def on_config_change(key, value):
-    """
-    Called whenever the widget writes a config change.
-    Stub for now — subsystems will hook in here as they're built.
-    """
     print(f"[main] config changed: {key} = {value}")
-    # Future hooks:
-    # if key == "at_home": session_manager.handle_home_change(value)
-    # if key == "terminal_visible": session_manager.show/hide panes
-    # if key == "voice": tts.handle_voice_change(value)
+
+
+def record_state_event(
+    event_type: str,
+    *,
+    source: str = "april",
+    domain: str = "april",
+    state: str = "observed",
+    entity_id: str | None = None,
+    payload: dict | None = None,
+    config: dict | None = None,
+) -> None:
+    append_event(
+        event_type,
+        source=source,
+        domain=domain,
+        state=state,
+        entity_id=entity_id,
+        payload=payload or {},
+    )
+    refresh_state_snapshot(config=config)
 
 
 def begin_interruptible_request(source: str) -> int:
@@ -83,6 +103,14 @@ def begin_interruptible_request(source: str) -> int:
         request_id = _latest_request_id
     stop_speaking()
     log_event("request_begin", source=source, request_id=request_id)
+    record_state_event(
+        "request_started",
+        source=source,
+        state="started",
+        entity_id=f"request_{request_id}",
+        payload={"source": source, "request_id": request_id},
+        config=load_config(),
+    )
     return request_id
 
 
@@ -95,22 +123,111 @@ def is_request_current(request_id: int) -> bool:
         return request_id == _latest_request_id
 
 
-# ── Main ──────────────────────────────────────────────────────────────────────
-
 def handle_user_text(text: str, source: str = "text", request_id: int | None = None):
-    """
-    Shared text entry point for typed input and future STT transcripts.
-    """
     print(f"[main] user text ({source}): {text}")
     log_event("user_text", source=source, text=text, request_id=request_id)
     config = load_config()
-    response = respond_with_brain(text, config)
+    observation = collect_runtime_observation()
+    record_state_event(
+        "desktop_observed",
+        source="desktop",
+        domain="desktop",
+        state="observed",
+        entity_id=f"request_{request_id}" if request_id is not None else None,
+        payload=observation,
+        config=config,
+    )
+    plan = plan_with_brain(text, config)
+    log_event(
+        "intent_plan",
+        source=source,
+        request_id=request_id,
+        intent=plan.get("intent"),
+        action=plan.get("action"),
+    )
+    record_state_event(
+        "intent_planned",
+        source=source,
+        state="observed",
+        entity_id=f"request_{request_id}" if request_id is not None else None,
+        payload={
+            "source": source,
+            "request_id": request_id,
+            "text": text,
+            "intent": plan.get("intent"),
+            "action": plan.get("action"),
+        },
+        config=config,
+    )
+    if request_id is not None and not is_request_current(request_id):
+        log_event("response_discarded", source=source, text=text, response="", request_id=request_id)
+        return ""
+
+    result = execute_plan(
+        plan,
+        config,
+        context={
+            "text": text,
+            "source": source,
+            "config_callback": on_config_change,
+        },
+    )
+    response = str(result.get("reply", "") or "").strip()
+    log_event(
+        "action_result",
+        source=source,
+        request_id=request_id,
+        intent=plan.get("intent"),
+        ok=bool(response),
+        reply=response,
+        config_changed=bool(result.get("config_changed")),
+    )
+    record_state_event(
+        "action_completed" if response else "action_failed",
+        source=source,
+        state="completed" if response else "failed",
+        entity_id=f"request_{request_id}" if request_id is not None else None,
+        payload={
+            "source": source,
+            "request_id": request_id,
+            "text": text,
+            "intent": plan.get("intent"),
+            "reply": response,
+            "config_changed": bool(result.get("config_changed")),
+        },
+        config=config,
+    )
     if request_id is not None and not is_request_current(request_id):
         log_event("response_discarded", source=source, text=text, response=response, request_id=request_id)
         return ""
-    if response.strip():
+
+    if result.get("config_changed"):
+        config = load_config()
+        updates = result.get("updates")
+        if isinstance(updates, dict) and updates:
+            record_state_event(
+                "config_changed",
+                source=source,
+                state="updated",
+                entity_id="runtime_config",
+                payload={"source": source, "updates": updates},
+                config=config,
+            )
+        if _widget_ref is not None:
+            _schedule_widget_config_refresh(config)
+
+    if response:
         print(f"[main] assistant response: {response}")
         log_event("assistant_response", source=source, response=response, request_id=request_id)
+        append_turn(text, response, source=source)
+        record_state_event(
+            "assistant_replied",
+            source=source,
+            state="completed",
+            entity_id=f"request_{request_id}" if request_id is not None else None,
+            payload={"source": source, "request_id": request_id, "response": response},
+            config=config,
+        )
         speak_reply(response, config)
         return response
     if source == "voice":
@@ -119,54 +236,116 @@ def handle_user_text(text: str, source: str = "text", request_id: int | None = N
 
 
 def on_text_submit(text: str):
-    """
-    Called when the widget text panel submits a message.
-    Stub for now - the real assistant pipeline will route this like transcribed speech.
-    """
     request_id = begin_interruptible_request("text")
     return handle_user_text(text, source="text", request_id=request_id)
 
 
 def on_audio_captured(audio_bytes: bytes, duration: float):
-    """
-    Called when the Copilot-key audio handler captures a WAV payload.
-    """
     request_id = begin_interruptible_request("voice")
     size_kb = len(audio_bytes) / 1024
     print(f"[main] audio captured: {duration:.2f}s, {size_kb:.1f} KiB WAV")
     log_event("audio_captured", duration=duration, size_kb=round(size_kb, 1), request_id=request_id)
     config = load_config()
+    record_state_event(
+        "audio_captured",
+        source="voice",
+        state="completed",
+        entity_id=f"request_{request_id}",
+        payload={"request_id": request_id, "duration": duration, "size_kb": round(size_kb, 1)},
+        config=config,
+    )
     transcript = transcribe(audio_bytes, config)
     if not transcript.strip():
         print("[main] transcription unavailable")
         log_event("transcription_unavailable", request_id=request_id)
+        record_state_event(
+            "transcript_unavailable",
+            source="voice",
+            state="failed",
+            entity_id=f"request_{request_id}",
+            payload={"request_id": request_id},
+            config=config,
+        )
         return "I captured that, but I couldn't transcribe it."
 
     print(f"[main] transcript: {transcript}")
     log_event("transcript", transcript=transcript, request_id=request_id)
+    record_state_event(
+        "transcript_received",
+        source="voice",
+        state="completed",
+        entity_id=f"request_{request_id}",
+        payload={"request_id": request_id, "transcript": transcript},
+        config=config,
+    )
     return handle_user_text(transcript, source="voice", request_id=request_id)
 
 
+def acquire_single_instance() -> bool:
+    global _single_instance_handle
+    if os.name != "nt":
+        return True
+    kernel32 = ctypes.windll.kernel32
+    ERROR_ALREADY_EXISTS = 183
+    handle = kernel32.CreateMutexW(None, False, _SINGLE_INSTANCE_NAME)
+    if not handle:
+        return True
+    last_error = kernel32.GetLastError()
+    if last_error == ERROR_ALREADY_EXISTS:
+        kernel32.CloseHandle(handle)
+        return False
+    _single_instance_handle = handle
+    return True
+
+
+def _schedule_widget_config_refresh(config: dict) -> None:
+    if _widget_ref is None or not hasattr(_widget_ref, "root"):
+        return
+
+    def apply_update():
+        _widget_ref.config.clear()
+        _widget_ref.config.update(config)
+        _widget_ref.update_from_config()
+
+    _widget_ref.root.after(0, apply_update)
+
+
 def main():
+    global _widget_ref
     config = load_config()
-    print(f"[main] config loaded — at_home={config.get('at_home')}, voice={config.get('voice')}")
+    if not acquire_single_instance():
+        print("[main] another APRIL instance is already running - exiting duplicate launch")
+        return
+    print(f"[main] config loaded - at_home={config.get('at_home')}, voice={config.get('voice')}")
+    record_state_event(
+        "april_started",
+        source="system",
+        state="started",
+        entity_id="april_runtime",
+        payload={"voice": bool(config.get("voice", True)), "at_home": bool(config.get("at_home", True))},
+        config=config,
+    )
 
-    # Import widget here so tkinter only touches the main thread
     from widget import APRILWidget
-    widget = APRILWidget(config, on_config_change=on_config_change, on_text_submit=on_text_submit)
 
-    print("[main] widget started — APRIL is idle")
-    # Subsystem init will go here between load_config and widget.run():
+    widget = APRILWidget(config, on_config_change=on_config_change, on_text_submit=on_text_submit)
+    _widget_ref = widget
+
+    print("[main] widget started - APRIL is idle")
     from input_handler import start as start_input_handler
-    input_handler = start_input_handler(widget, config, on_audio=on_audio_captured, on_interrupt=interrupt_current_request)
-    # if config["voice"] and config["at_home"]: tts.open_mac_channel(config)
-    # etc.
+
+    input_handler = start_input_handler(
+        widget,
+        config,
+        on_audio=on_audio_captured,
+        on_interrupt=interrupt_current_request,
+    )
 
     try:
-        widget.run()  # blocks until window closed
+        widget.run()
     finally:
         input_handler.stop()
-    print("[main] widget closed — shutting down")
+    print("[main] widget closed - shutting down")
 
 
 if __name__ == "__main__":

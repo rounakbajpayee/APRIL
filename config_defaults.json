@@ -17,7 +17,7 @@
     "capabilities.md",
     "rules.md"
   ],
-  "stt_mode": "local_first",
+  "stt_mode": "remote_first",
   "stt_local_model": "small.en",
   "stt_language": "en",
   "stt_initial_prompt": "APRIL",
@@ -33,8 +33,14 @@
   "audio_sample_rate": 16000,
   "audio_channels": 1,
   "audio_chunk_size": 1024,
+  "memory_context_turns": 6,
+  "state_context_timeline_limit": 6,
+  "shell_timeout_seconds": 20,
   "copilot_hold_threshold": 0.3,
   "copilot_double_tap_window": 0.4,
   "copilot_min_audio_seconds": 0.5,
-  "suppress_copilot": true
+  "suppress_copilot": true,
+  "widget_anchor_x": null,
+  "widget_anchor_y": null,
+  "widget_anchor_bottom_y": null
 }

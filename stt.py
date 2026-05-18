@@ -33,7 +33,7 @@ def transcribe(audio_bytes: bytes, config: dict[str, Any]) -> str:
     if not audio_bytes:
         return ""
 
-    prefer_local = str(config.get("stt_mode", "local_first") or "local_first").strip().lower() != "remote_first"
+    prefer_local = str(config.get("stt_mode", "remote_first") or "remote_first").strip().lower() != "remote_first"
     whisper_host = str(config.get("whisper_host", "") or "").strip()
 
     attempts = []

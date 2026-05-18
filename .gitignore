@@ -1,4 +1,6 @@
 config.json
+learned_phrases.json
+memory.json
 __pycache__/
 *.pyc
 .venv/
@@ -6,5 +8,6 @@ __pycache__/
 dist/
 build/
 logs/
+state/
 .DS_Store
 Thumbs.db

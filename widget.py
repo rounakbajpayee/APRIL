@@ -14,6 +14,8 @@ import threading
 import tkinter as tk
 import tkinter.font as tkfont
 
+from debug_log import read_recent_events
+
 
 gdi32 = ctypes.windll.gdi32
 user32 = ctypes.windll.user32
@@ -72,6 +74,9 @@ STATES = {
 }
 
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
+HISTORY_PATH = os.path.join(os.path.dirname(__file__), "logs", "ui_history.json")
+MAX_HISTORY_ITEMS = 40
+RECENT_DEBUG_EVENTS = 10
 
 BG = "#111214"
 TRANSPARENT = "#010203"
@@ -147,10 +152,12 @@ class APRILWidget:
         self._build_fonts()
         self._build_canvas()
         self._build_text_panel()
+        self._load_persisted_history()
         self._redraw()
         self.root.deiconify()
         self._schedule_collapse()
         if self._text_panel_active():
+            self._seed_debug_console_if_needed()
             self.root.after(120, self._focus_text_input)
 
     def _build_window(self):
@@ -351,6 +358,66 @@ class APRILWidget:
 
     def _text_panel_active(self):
         return not self.config.get("voice", True)
+
+    def _load_persisted_history(self):
+        try:
+            with open(HISTORY_PATH, encoding="utf-8") as handle:
+                items = json.load(handle)
+        except Exception:
+            return
+        if not isinstance(items, list):
+            return
+        for item in items[-MAX_HISTORY_ITEMS:]:
+            if not isinstance(item, dict):
+                continue
+            role = str(item.get("role", "") or "").strip().lower()
+            text = str(item.get("text", "") or "").strip()
+            if role not in {"user", "assistant", "system"} or not text:
+                continue
+            self._history.append((role, " ".join(text.split())))
+        if self._history:
+            self._render_history()
+
+    def _save_history(self):
+        os.makedirs(os.path.dirname(HISTORY_PATH), exist_ok=True)
+        data = [{"role": role, "text": text} for role, text in self._history[-MAX_HISTORY_ITEMS:]]
+        with open(HISTORY_PATH, "w", encoding="utf-8") as handle:
+            json.dump(data, handle, indent=2)
+
+    def _seed_debug_console_if_needed(self):
+        if self._history:
+            return
+        debug_events = read_recent_events(limit=RECENT_DEBUG_EVENTS)
+        if not debug_events:
+            return
+        for event in debug_events:
+            summary = self._format_debug_event(event)
+            if summary:
+                self._history.append(("system", summary))
+        if self._history:
+            self._history = self._history[-MAX_HISTORY_ITEMS:]
+            self._render_history()
+            try:
+                self._save_history()
+            except Exception:
+                pass
+
+    def _format_debug_event(self, event):
+        event_type = str(event.get("event", "") or "").strip()
+        if not event_type:
+            return ""
+        if event_type == "transcript":
+            transcript = str(event.get("transcript", "") or "").strip()
+            return f"Transcript: {transcript}" if transcript else ""
+        if event_type == "assistant_response":
+            response = str(event.get("response", "") or "").strip()
+            return f"Reply: {response}" if response else ""
+        if event_type == "transcription_unavailable":
+            return "Transcription was unavailable."
+        if event_type == "request_begin":
+            source = str(event.get("source", "") or "").strip() or "unknown"
+            return f"Request started from {source}."
+        return ""
 
     def _measure_layout(self):
         if self._text_panel_active():
@@ -573,8 +640,14 @@ class APRILWidget:
         if not clean:
             return
         self._history.append((role, clean))
-        self._history = self._history[-40:]
+        self._history = self._history[-MAX_HISTORY_ITEMS:]
+        self._render_history()
+        try:
+            self._save_history()
+        except Exception:
+            pass
 
+    def _render_history(self):
         self.output_text.config(state="normal")
         self.output_text.delete("1.0", "end")
         for item_role, item_text in self._history:
@@ -691,10 +764,19 @@ class APRILWidget:
 
     def _set_position(self, w, h, radius, anchor="center"):
         if self._anchor_x is None or self._anchor_y is None:
-            left, top, right, bottom = _get_work_area()
-            self._anchor_x = (left + right) / 2
-            self._anchor_y = bottom - ANCHOR_FROM_BOTTOM
-            self._anchor_bottom_y = self._anchor_y + 25
+            persisted_x = self.config.get("widget_anchor_x")
+            persisted_y = self.config.get("widget_anchor_y")
+            persisted_bottom_y = self.config.get("widget_anchor_bottom_y")
+            if persisted_x is not None and persisted_y is not None:
+                self._anchor_x = float(persisted_x)
+                self._anchor_y = float(persisted_y)
+                if persisted_bottom_y is not None:
+                    self._anchor_bottom_y = float(persisted_bottom_y)
+            if self._anchor_x is None or self._anchor_y is None:
+                left, top, right, bottom = _get_work_area()
+                self._anchor_x = (left + right) / 2
+                self._anchor_y = bottom - ANCHOR_FROM_BOTTOM
+                self._anchor_bottom_y = self._anchor_y + 25
         x = round(self._anchor_x - w / 2)
         if anchor == "bottom":
             bottom_y = self._anchor_bottom_y if self._anchor_bottom_y is not None else self._anchor_y + 25
@@ -820,6 +902,10 @@ class APRILWidget:
         self._anchor_x = x + self.root.winfo_width() / 2
         self._anchor_y = y + self.root.winfo_height() / 2
         self._anchor_bottom_y = y + self.root.winfo_height()
+        self.config["widget_anchor_x"] = round(self._anchor_x, 1)
+        self.config["widget_anchor_y"] = round(self._anchor_y, 1)
+        self.config["widget_anchor_bottom_y"] = round(self._anchor_bottom_y, 1)
+        self._write_config()
 
     def _on_hover_enter(self, _event=None):
         self._hovering = True
@@ -907,7 +993,7 @@ class APRILWidget:
 
     def _write_config(self):
         try:
-            with open(CONFIG_PATH, "w") as f:
+            with open(CONFIG_PATH, "w", encoding="utf-8") as f:
                 json.dump(self.config, f, indent=2)
         except Exception as e:
             self.set_state("error", f"config write failed: {e}")

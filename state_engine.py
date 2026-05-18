@@ -1,0 +1,242 @@
+"""
+state_engine.py - Minimal projection and prompt-safe context builder for APRIL.
+
+This is intentionally simple:
+- replay the event ledger
+- build small state snapshots
+- expose a prompt/context summary that the current MVP can already use
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+import json
+from pathlib import Path
+from typing import Any
+
+from event_ledger import STATE_DIR, read_events, recent_prompt_safe_events
+
+
+SNAPSHOT_PATH = STATE_DIR / "context_snapshot.json"
+APRIL_STATE_PATH = STATE_DIR / "april_state.json"
+DESKTOP_STATE_PATH = STATE_DIR / "desktop_state.json"
+
+
+def refresh_state_snapshot(config: dict[str, Any] | None = None) -> dict[str, Any]:
+    events = read_events()
+    snapshot = build_context_snapshot(events, config=config)
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    SNAPSHOT_PATH.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
+    APRIL_STATE_PATH.write_text(json.dumps(snapshot.get("april_state", {}), indent=2), encoding="utf-8")
+    DESKTOP_STATE_PATH.write_text(json.dumps(snapshot.get("desktop_state", {}), indent=2), encoding="utf-8")
+    return snapshot
+
+
+def load_snapshot() -> dict[str, Any]:
+    try:
+        payload = json.loads(SNAPSHOT_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def build_context_snapshot(events: list[dict[str, Any]], config: dict[str, Any] | None = None) -> dict[str, Any]:
+    recent_timeline: list[dict[str, Any]] = []
+    recent_transcripts: list[str] = []
+    recent_replies: list[str] = []
+    recent_intents: list[str] = []
+    open_loops: list[str] = []
+    current_request: dict[str, Any] | None = None
+    current_status = "idle"
+    active_window = ""
+    active_app = ""
+    started_at = ""
+    last_config_change: dict[str, Any] | None = None
+
+    for event in events:
+        event_type = str(event.get("event_type", "") or "").strip()
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        timestamp = str(event.get("ts", "") or "").strip()
+
+        if event_type == "april_started":
+            started_at = started_at or timestamp
+            current_status = "idle"
+        elif event_type == "request_started":
+            current_status = "listening"
+            current_request = {
+                "request_id": payload.get("request_id"),
+                "source": payload.get("source", ""),
+                "text": payload.get("text", ""),
+                "ts": timestamp,
+            }
+        elif event_type == "audio_captured":
+            current_status = "transcribing"
+        elif event_type == "transcript_received":
+            transcript = str(payload.get("transcript", "") or "").strip()
+            if transcript:
+                recent_transcripts.append(transcript)
+            current_status = "reasoning"
+        elif event_type == "intent_planned":
+            intent = str(payload.get("intent", "") or "").strip()
+            if intent:
+                recent_intents.append(intent)
+            current_status = "acting"
+        elif event_type == "action_completed":
+            current_status = "speaking"
+            reply = str(payload.get("reply", "") or "").strip()
+            if reply:
+                recent_replies.append(reply)
+            if current_request and payload.get("request_id") == current_request.get("request_id"):
+                current_request["intent"] = payload.get("intent", "")
+        elif event_type == "action_failed":
+            current_status = "error"
+            detail = str(payload.get("reply", "") or payload.get("error", "") or "").strip()
+            if detail:
+                open_loops.append(detail)
+        elif event_type == "assistant_replied":
+            current_status = "idle"
+            reply = str(payload.get("response", "") or "").strip()
+            if reply:
+                recent_replies.append(reply)
+        elif event_type == "config_changed":
+            last_config_change = {
+                "ts": timestamp,
+                "updates": payload.get("updates", {}),
+            }
+        elif event_type == "desktop_observed":
+            foreground = payload.get("foreground") if isinstance(payload.get("foreground"), dict) else {}
+            active_window = str(foreground.get("window_title", "") or active_window).strip()
+            active_app = str(foreground.get("app_hint", "") or active_app).strip()
+
+        summary = _event_summary(event)
+        if summary:
+            recent_timeline.append({"ts": timestamp, "summary": summary})
+
+    snapshot = {
+        "identity": {
+            "assistant": "APRIL",
+            "host_os": (config or {}).get("host_os", "windows" if Path.cwd().drive else "local"),
+        },
+        "current_state": {
+            "voice_enabled": bool((config or {}).get("voice", True)),
+            "at_home": bool((config or {}).get("at_home", True)),
+            "tts_engine": str((config or {}).get("tts_engine", "auto") or "auto"),
+            "status": current_status,
+            "active_window": active_window,
+            "active_app": active_app,
+            "active_request": current_request,
+        },
+        "recent_timeline": recent_timeline[-15:],
+        "active_entities": [entity for entity in [current_request] if entity],
+        "open_loops": open_loops[-10:],
+        "domain_summaries": {
+            "april": {
+                "started_at": started_at,
+                "recent_transcripts": recent_transcripts[-5:],
+                "recent_replies": recent_replies[-5:],
+                "recent_intents": recent_intents[-5:],
+                "last_config_change": last_config_change,
+            },
+            "desktop": {
+                "active_window": active_window,
+                "active_app": active_app,
+            },
+        },
+        "safety_and_sensitivity": {
+            "contains_sensitive_context": any(
+                str(event.get("sensitivity", "") or "").strip() not in {"", "low"}
+                for event in recent_prompt_safe_events(limit=20)
+            ),
+        },
+        "april_state": {
+            "status": current_status,
+            "recent_transcripts": recent_transcripts[-5:],
+            "recent_replies": recent_replies[-5:],
+            "recent_intents": recent_intents[-5:],
+            "open_loops": open_loops[-10:],
+        },
+        "desktop_state": {
+            "active_window": active_window,
+            "active_app": active_app,
+        },
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    return snapshot
+
+
+def get_prompt_context_summary(limit: int = 8) -> str:
+    snapshot = load_snapshot()
+    if not snapshot:
+        snapshot = refresh_state_snapshot()
+    if not snapshot:
+        return ""
+
+    current_state = snapshot.get("current_state", {})
+    timeline = snapshot.get("recent_timeline", [])
+    open_loops = snapshot.get("open_loops", [])
+
+    lines = [
+        "APRIL runtime context:",
+        f"- status: {current_state.get('status', 'unknown')}",
+        f"- voice_enabled: {current_state.get('voice_enabled', True)}",
+        f"- at_home: {current_state.get('at_home', True)}",
+    ]
+    active_app = str(current_state.get("active_app", "") or "").strip()
+    active_window = str(current_state.get("active_window", "") or "").strip()
+    if active_app or active_window:
+        lines.append(f"- foreground: {active_app or active_window} | {active_window or active_app}")
+
+    active_request = current_state.get("active_request")
+    if isinstance(active_request, dict) and active_request:
+        lines.append(f"- active_request_source: {active_request.get('source', '')}")
+        if active_request.get("text"):
+            lines.append(f"- active_request_text: {active_request.get('text')}")
+
+    if timeline:
+        lines.append("Recent timeline:")
+        for item in timeline[-limit:]:
+            summary = str(item.get("summary", "") or "").strip()
+            if summary:
+                lines.append(f"- {summary}")
+
+    if open_loops:
+        lines.append("Open loops:")
+        for item in open_loops[-5:]:
+            lines.append(f"- {item}")
+
+    return "\n".join(lines).strip()
+
+
+def _event_summary(event: dict[str, Any]) -> str:
+    event_type = str(event.get("event_type", "") or "").strip()
+    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+
+    if event_type == "april_started":
+        return "APRIL started."
+    if event_type == "request_started":
+        source = str(payload.get("source", "") or "").strip() or "unknown"
+        return f"Request started from {source}."
+    if event_type == "desktop_observed":
+        title = str((payload.get("foreground") or {}).get("window_title", "") or "").strip()
+        return f"Observed foreground window: {title}" if title else ""
+    if event_type == "transcript_received":
+        transcript = str(payload.get("transcript", "") or "").strip()
+        return f"Heard: {transcript}" if transcript else ""
+    if event_type == "intent_planned":
+        intent = str(payload.get("intent", "") or "").strip()
+        return f"Planned {intent} action." if intent else ""
+    if event_type == "action_completed":
+        reply = str(payload.get("reply", "") or "").strip()
+        return f"Action completed: {reply}" if reply else "Action completed."
+    if event_type == "action_failed":
+        reply = str(payload.get("reply", "") or payload.get("error", "") or "").strip()
+        return f"Action failed: {reply}" if reply else "Action failed."
+    if event_type == "assistant_replied":
+        response = str(payload.get("response", "") or "").strip()
+        return f"Replied: {response}" if response else ""
+    if event_type == "config_changed":
+        updates = payload.get("updates", {})
+        if isinstance(updates, dict) and updates:
+            fragment = ", ".join(f"{key}={value}" for key, value in updates.items())
+            return f"Config changed: {fragment}"
+    return ""
