@@ -126,6 +126,7 @@ class APRILWidget:
         self._anim_job = None
         self._collapse_job = None
         self._message_clear_job = None
+        self._hover_sync_job = None
         self._dot_id = None
         self._wave_ids = []
         self._wave_phase = 0
@@ -162,6 +163,8 @@ class APRILWidget:
         self.root.resizable(False, False)
         self.root.config(bg=TRANSPARENT, padx=0, pady=0)
         self.root.after(2000, self._keep_on_top)
+        self.root.bind("<Enter>", self._on_hover_enter)
+        self.root.bind("<Leave>", self._on_hover_leave)
 
     def _build_fonts(self):
         self.font_label = tkfont.Font(family="Segoe UI", size=10, weight="bold")
@@ -820,6 +823,9 @@ class APRILWidget:
 
     def _on_hover_enter(self, _event=None):
         self._hovering = True
+        if self._hover_sync_job:
+            self.root.after_cancel(self._hover_sync_job)
+            self._hover_sync_job = None
         if self._collapse_job:
             self.root.after_cancel(self._collapse_job)
             self._collapse_job = None
@@ -828,6 +834,12 @@ class APRILWidget:
             self._message_clear_job = None
 
     def _on_hover_leave(self, _event=None):
+        if self._hover_sync_job:
+            self.root.after_cancel(self._hover_sync_job)
+        self._hover_sync_job = self.root.after(40, self._sync_hover_exit)
+
+    def _sync_hover_exit(self):
+        self._hover_sync_job = None
         pointer_x = self.root.winfo_pointerx()
         pointer_y = self.root.winfo_pointery()
         root_x = self.root.winfo_rootx()
