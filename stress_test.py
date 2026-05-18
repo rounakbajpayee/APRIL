@@ -134,6 +134,13 @@ class AprilStressTests(unittest.TestCase):
     def test_event_ledger_projects_snapshot_and_context(self):
         event_ledger.append_event("april_started", source="system", state="started", entity_id="april_runtime")
         event_ledger.append_event(
+            "request_started",
+            source="voice",
+            state="started",
+            entity_id="request_1",
+            payload={"request_id": 1, "source": "voice"},
+        )
+        event_ledger.append_event(
             "desktop_observed",
             source="desktop",
             domain="desktop",
@@ -154,6 +161,13 @@ class AprilStressTests(unittest.TestCase):
             payload={"request_id": 1, "intent": "browser", "text": "open youtube"},
         )
         event_ledger.append_event(
+            "action_completed",
+            source="voice",
+            state="completed",
+            entity_id="request_1",
+            payload={"request_id": 1, "intent": "browser", "reply": "Opening https://www.youtube.com."},
+        )
+        event_ledger.append_event(
             "assistant_replied",
             source="voice",
             state="completed",
@@ -167,6 +181,7 @@ class AprilStressTests(unittest.TestCase):
         self.assertTrue(SNAPSHOT_PATH.exists())
         self.assertEqual(snapshot["current_state"]["active_app"], "Notes")
         self.assertIn("open youtube", json.dumps(snapshot))
+        self.assertIsNone(snapshot["current_state"]["active_request"])
         self.assertIn("APRIL runtime context:", summary)
         self.assertIn("Planned browser action.", summary)
         widget_lines = state_engine.get_widget_snapshot_lines(limit=5)
@@ -177,6 +192,28 @@ class AprilStressTests(unittest.TestCase):
         self.assertEqual(widget_data["focus"], "Notes")
         self.assertEqual(widget_data["last_transcript"], "open youtube")
         self.assertIn("Opening https://www.youtube.com.", widget_data["last_reply"])
+        self.assertEqual(len(snapshot["domain_summaries"]["april"]["recent_replies"]), 1)
+
+    def test_transcript_failure_surfaces_open_loop(self):
+        event_ledger.append_event("april_started", source="system", state="started", entity_id="april_runtime")
+        event_ledger.append_event(
+            "request_started",
+            source="voice",
+            state="started",
+            entity_id="request_3",
+            payload={"request_id": 3, "source": "voice"},
+        )
+        event_ledger.append_event(
+            "transcript_unavailable",
+            source="voice",
+            state="failed",
+            entity_id="request_3",
+            payload={"request_id": 3},
+        )
+
+        snapshot = state_engine.refresh_state_snapshot(config=self.config)
+        self.assertEqual(snapshot["current_state"]["status"], "error")
+        self.assertIn("Transcription was unavailable.", snapshot["open_loops"])
 
     def test_execution_dispatch_survives_mixed_workload(self):
         requests = [

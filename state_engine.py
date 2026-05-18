@@ -57,6 +57,7 @@ def build_context_snapshot(events: list[dict[str, Any]], config: dict[str, Any] 
         event_type = str(event.get("event_type", "") or "").strip()
         payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
         timestamp = str(event.get("ts", "") or "").strip()
+        request_id = payload.get("request_id")
 
         if event_type == "april_started":
             started_at = started_at or timestamp
@@ -75,17 +76,25 @@ def build_context_snapshot(events: list[dict[str, Any]], config: dict[str, Any] 
             transcript = str(payload.get("transcript", "") or "").strip()
             if transcript:
                 recent_transcripts.append(transcript)
+            if current_request and request_id == current_request.get("request_id") and transcript:
+                current_request["text"] = transcript
             current_status = "reasoning"
+        elif event_type == "transcript_unavailable":
+            current_status = "error"
+            open_loops.append("Transcription was unavailable.")
+            if current_request and request_id == current_request.get("request_id"):
+                current_request["failed"] = "transcript_unavailable"
         elif event_type == "intent_planned":
             intent = str(payload.get("intent", "") or "").strip()
             if intent:
                 recent_intents.append(intent)
+            if current_request and request_id == current_request.get("request_id"):
+                current_request["intent"] = intent
+                if payload.get("text"):
+                    current_request["text"] = payload.get("text")
             current_status = "acting"
         elif event_type == "action_completed":
             current_status = "speaking"
-            reply = str(payload.get("reply", "") or "").strip()
-            if reply:
-                recent_replies.append(reply)
             if current_request and payload.get("request_id") == current_request.get("request_id"):
                 current_request["intent"] = payload.get("intent", "")
         elif event_type == "action_failed":
@@ -93,11 +102,17 @@ def build_context_snapshot(events: list[dict[str, Any]], config: dict[str, Any] 
             detail = str(payload.get("reply", "") or payload.get("error", "") or "").strip()
             if detail:
                 open_loops.append(detail)
+            if current_request and request_id == current_request.get("request_id"):
+                current_request["failed"] = detail or "action_failed"
+                current_request = None
         elif event_type == "assistant_replied":
             current_status = "idle"
             reply = str(payload.get("response", "") or "").strip()
             if reply:
-                recent_replies.append(reply)
+                if not recent_replies or recent_replies[-1] != reply:
+                    recent_replies.append(reply)
+            if current_request and request_id == current_request.get("request_id"):
+                current_request = None
         elif event_type == "config_changed":
             last_config_change = {
                 "ts": timestamp,
