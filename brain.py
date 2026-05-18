@@ -8,10 +8,19 @@ classification and tool execution can layer on later.
 
 from __future__ import annotations
 
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 
 DEFAULT_TIMEOUT_SECONDS = 30
+BASE_DIR = Path(__file__).resolve().parent
+DEFAULT_PROMPT_FILES = [
+    "soul.md",
+    "style.md",
+    "capabilities.md",
+    "rules.md",
+]
 DEFAULT_SYSTEM_PROMPT = (
     "You are APRIL, a concise home assistant running on a Windows laptop. "
     "Reply naturally in 1 to 3 short sentences. "
@@ -27,6 +36,10 @@ def respond(text: str, config: dict[str, Any]) -> str:
     clean = " ".join(str(text).strip().split())
     if not clean:
         return ""
+
+    local_reply = _local_reply(clean, config)
+    if local_reply:
+        return local_reply
 
     ollama_host = str(config.get("ollama_host", "") or "").strip()
     ollama_model = str(config.get("ollama_model", "") or "").strip()
@@ -71,4 +84,63 @@ def _system_prompt(config: dict[str, Any]) -> str:
     custom_prompt = str(config.get("brain_system_prompt", "") or "").strip()
     if custom_prompt:
         return custom_prompt
+    prompt_from_files = _load_prompt_files(config)
+    if prompt_from_files:
+        return prompt_from_files
     return DEFAULT_SYSTEM_PROMPT
+
+
+def _local_reply(text: str, config: dict[str, Any]) -> str:
+    lowered = text.lower()
+
+    if _looks_like_time_question(lowered):
+        now = datetime.now().astimezone()
+        return f"It's {now.strftime('%I:%M %p').lstrip('0')} on {now.strftime('%A, %B %d')}."
+
+    if "what model" in lowered and "using" in lowered:
+        model = str(config.get("ollama_model", "") or "").strip()
+        if model:
+            return f"I'm using the Ollama model {model}."
+        return "I don't have a configured Ollama model right now."
+
+    return ""
+
+
+def _looks_like_time_question(lowered: str) -> bool:
+    time_markers = [
+        "what time is it",
+        "tell me the time",
+        "current time",
+        "time right now",
+    ]
+    return any(marker in lowered for marker in time_markers)
+
+
+def _load_prompt_files(config: dict[str, Any]) -> str:
+    prompt_dir_name = str(config.get("brain_prompt_dir", "prompts") or "prompts").strip() or "prompts"
+    prompt_dir = BASE_DIR / prompt_dir_name
+    if not prompt_dir.exists() or not prompt_dir.is_dir():
+        return ""
+
+    configured_files = config.get("brain_prompt_files", DEFAULT_PROMPT_FILES)
+    if isinstance(configured_files, str):
+        filenames = [item.strip() for item in configured_files.split(",") if item.strip()]
+    elif isinstance(configured_files, list):
+        filenames = [str(item).strip() for item in configured_files if str(item).strip()]
+    else:
+        filenames = list(DEFAULT_PROMPT_FILES)
+
+    sections = []
+    for filename in filenames:
+        path = prompt_dir / filename
+        if not path.exists() or not path.is_file():
+            continue
+        try:
+            body = path.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if not body:
+            continue
+        sections.append(f"[{filename}]\n{body}")
+
+    return "\n\n".join(sections).strip()

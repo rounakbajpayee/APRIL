@@ -10,6 +10,13 @@
   "ollama_model": "gemma4:e2b",
   "brain_timeout_seconds": 30,
   "brain_system_prompt": "",
+  "brain_prompt_dir": "prompts",
+  "brain_prompt_files": [
+    "soul.md",
+    "style.md",
+    "capabilities.md",
+    "rules.md"
+  ],
   "stt_mode": "local_first",
   "stt_local_model": "small.en",
   "stt_language": "en",
