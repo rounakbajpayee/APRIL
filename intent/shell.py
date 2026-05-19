@@ -10,9 +10,72 @@ from typing import Any
 
 from brain import summarize_output
 from session_manager import describe_node, execute
+from .tool_interface import IntentPlan, IntentResult
 
 
-def handle(action: dict[str, Any], config: dict[str, Any], context: dict[str, Any] | None = None) -> dict[str, Any]:
+INTENT_NAME = "shell"
+TRIGGERS = [
+    "connect to",
+    "run",
+    "execute",
+    "what's in",
+    "what is in",
+    "list files",
+    "show files",
+    "current directory",
+    "working directory",
+    "who am i",
+    "check network load",
+    "disk usage",
+    "memory usage",
+]
+OLLAMA_DESCRIPTION = "Run shell commands locally or on configured remote nodes"
+
+
+def match(text: str, lowered: str) -> IntentPlan | None:
+    node = _detect_node(lowered)
+
+    if lowered.startswith("connect to "):
+        target = lowered.split("connect to ", 1)[1].strip(" .")
+        if target in {"mac", "dell", "local"}:
+            return {
+                "intent": INTENT_NAME,
+                "response_preview": f"Checking {target}.",
+                "action": {"mode": "check_connection", "node": target, "text": text},
+            }
+
+    if lowered.startswith("run ") or lowered.startswith("execute "):
+        command = text.split(" ", 1)[1].strip()
+        command = _strip_trailing_node_selector(command)
+        return {
+            "intent": INTENT_NAME,
+            "response_preview": f"Running that on {node}.",
+            "action": {"mode": "command", "node": node, "command": command, "text": text},
+        }
+
+    simple_phrases = (
+        "what's in",
+        "what is in",
+        "list files",
+        "show files",
+        "current directory",
+        "working directory",
+        "who am i",
+        "check network load",
+        "disk usage",
+        "memory usage",
+    )
+    if any(phrase in lowered for phrase in simple_phrases):
+        return {
+            "intent": INTENT_NAME,
+            "response_preview": f"Checking that on {node}.",
+            "action": {"mode": "natural", "node": node, "text": text},
+        }
+
+    return None
+
+
+def execute(action: dict[str, Any], config: dict[str, Any], context: dict[str, Any] | None = None) -> IntentResult:
     context = context or {}
     node = str(action.get("node", "local") or "local").strip().lower()
     mode = str(action.get("mode", "command") or "command").strip().lower()
@@ -56,6 +119,27 @@ def handle(action: dict[str, Any], config: dict[str, Any], context: dict[str, An
     if node == "local":
         return {"reply": summary, "config_changed": False, "ok": True}
     return {"reply": f"On {target}, {summary}", "config_changed": False, "ok": True}
+
+
+def handle(action: dict[str, Any], config: dict[str, Any], context: dict[str, Any] | None = None) -> IntentResult:
+    return execute(action, config, context)
+
+
+def _detect_node(lowered: str) -> str:
+    if " on mac" in lowered or lowered.endswith(" mac"):
+        return "mac"
+    if " on dell" in lowered or lowered.endswith(" dell"):
+        return "dell"
+    if " locally" in lowered or " on local" in lowered or lowered.endswith(" local"):
+        return "local"
+    return "local"
+
+
+def _strip_trailing_node_selector(command: str) -> str:
+    for suffix in (" on mac", " on dell", " on local"):
+        if command.lower().endswith(suffix):
+            return command[: -len(suffix)].strip()
+    return command
 
 
 def infer_command(text: str, node: str) -> str:

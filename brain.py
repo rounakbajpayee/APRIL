@@ -256,44 +256,44 @@ def _local_reply(text: str, config: dict[str, Any]) -> str:
 
 
 def _local_plan(text: str) -> dict[str, Any] | None:
+    from intent import registry as intent_registry
+
     lowered = text.lower()
+    triggered_tools = intent_registry.iter_triggered_tools(lowered)
 
-    config_plan = _config_plan(text, lowered)
-    if config_plan:
-        return config_plan
+    for tool in triggered_tools:
+        plan = tool.match(text, lowered)
+        if plan:
+            return plan
 
-    device_plan = _device_plan(text, lowered)
-    if device_plan:
-        return device_plan
-
-    browser_plan = _browser_plan(text, lowered)
-    if browser_plan:
-        return browser_plan
-
-    vision_plan = _vision_plan(text, lowered)
-    if vision_plan:
-        return vision_plan
-
-    media_plan = _media_plan(text, lowered)
-    if media_plan:
-        return media_plan
-
-    shell_plan = _shell_plan(text, lowered)
-    if shell_plan:
-        return shell_plan
+    for tool in intent_registry.tools():
+        if tool.intent_name == "conversation":
+            continue
+        if tool in triggered_tools:
+            continue
+        plan = tool.match(text, lowered)
+        if plan:
+            return plan
 
     return None
 
 
 def _ollama_intent_plan(text: str, config: dict[str, Any]) -> dict[str, Any] | None:
+    from intent import registry as intent_registry
+
     ollama_host = str(config.get("ollama_host", "") or "").strip()
     ollama_model = str(config.get("ollama_model", "") or "").strip()
     if not ollama_host or not ollama_model:
         return None
 
+    intent_lines = "\n".join(
+        f"- {tool.intent_name}: {tool.ollama_description}"
+        for tool in intent_registry.tools()
+    )
+    action_rules = "\n".join(_planner_action_rules(intent_registry))
     planner_prompt = (
-        "Classify the request into one of these intents: "
-        "shell, device, browser, media, config, vision, conversation.\n"
+        "Classify the request into one of these intents:\n"
+        f"{intent_lines}\n\n"
         "Return JSON only with this shape:\n"
         "{\n"
         '  "intent": "...",\n'
@@ -301,13 +301,7 @@ def _ollama_intent_plan(text: str, config: dict[str, Any]) -> dict[str, Any] | N
         '  "action": { ... }\n'
         "}\n\n"
         "Action rules:\n"
-        '- config: use keys like {"updates":{"voice":false}}\n'
-        '- device: use modes like set_volume, adjust_volume, set_brightness, open_app, media_key\n'
-        '- browser: use modes like open_url, search_web, search_youtube\n'
-        '- shell: include {"node":"local|mac|dell","command":"..."} when possible\n'
-        '- media: include title or mode like continue\n'
-        '- vision: include {"question":"..."}\n'
-        '- conversation: include {"text":"original request"}\n\n'
+        f"{action_rules}\n\n"
         f'User request: "{text}"'
     )
 
@@ -332,13 +326,15 @@ def _ollama_intent_plan(text: str, config: dict[str, Any]) -> dict[str, Any] | N
 
 
 def _normalize_plan(payload: dict[str, Any], original_text: str) -> dict[str, Any]:
+    from intent import registry as intent_registry
+
     intent = str(payload.get("intent", "") or "").strip().lower()
     response_preview = str(payload.get("response_preview", "") or "").strip()
     action = payload.get("action")
     if not isinstance(action, dict):
         action = {}
     action.setdefault("text", original_text)
-    if intent not in {"shell", "device", "browser", "media", "config", "vision", "conversation"}:
+    if intent_registry.get(intent) is None:
         return _conversation_plan(original_text, "")
     if intent == "conversation":
         action.setdefault("text", original_text)
@@ -357,6 +353,24 @@ def _conversation_plan(text: str, preview: str) -> dict[str, Any]:
             "text": text,
         },
     }
+
+
+def _planner_action_rules(intent_registry: Any) -> list[str]:
+    action_rules = {
+        "config": '- config: use keys like {"updates":{"voice":false}}',
+        "device": "- device: use modes like set_volume, adjust_volume, set_brightness, open_app, media_key",
+        "browser": "- browser: use modes like open_url, search_web, search_youtube",
+        "shell": '- shell: include {"node":"local|mac|dell","command":"..."} when possible',
+        "media": "- media: include title or mode like continue",
+        "vision": '- vision: include {"question":"..."}',
+        "conversation": '- conversation: include {"text":"original request"}',
+    }
+    lines: list[str] = []
+    for tool in intent_registry.tools():
+        rule = action_rules.get(tool.intent_name)
+        if rule:
+            lines.append(rule)
+    return lines
 
 
 def _config_plan(text: str, lowered: str) -> dict[str, Any] | None:
