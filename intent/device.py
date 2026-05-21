@@ -24,6 +24,9 @@ TRIGGERS = [
     "play pause",
     "pause music",
     "resume music",
+    "pause media",
+    "resume media",
+    "play media",
     "next track",
     "previous track",
     "open",
@@ -31,6 +34,43 @@ TRIGGERS = [
     "start",
 ]
 OLLAMA_DESCRIPTION = "Control device settings, media keys, brightness, volume, or open local apps"
+EXAMPLES = [
+    {
+        "text": "set volume to 40",
+        "response_preview": "Setting volume to 40 percent.",
+        "action": {"mode": "set_volume", "level": 40},
+    },
+    {
+        "text": "volume up",
+        "response_preview": "Turning the volume up.",
+        "action": {"mode": "adjust_volume", "delta": 10},
+    },
+    {
+        "text": "mute audio",
+        "response_preview": "Muting audio.",
+        "action": {"mode": "media_key", "key": "mute"},
+    },
+    {
+        "text": "increase brightness",
+        "response_preview": "Increasing brightness.",
+        "action": {"mode": "adjust_brightness", "delta": 10},
+    },
+    {
+        "text": "open notepad",
+        "response_preview": "Opening notepad.",
+        "action": {"mode": "open_app", "app": "notepad"},
+    },
+    {
+        "text": "bring up spotify",
+        "response_preview": "Opening spotify.",
+        "action": {"mode": "open_app", "app": "spotify"},
+    },
+    {
+        "text": "pause media",
+        "response_preview": "Toggling playback.",
+        "action": {"mode": "media_key", "key": "play_pause"},
+    },
+]
 
 APP_ALIASES = {
     "spotify",
@@ -103,7 +143,7 @@ def match(text: str, lowered: str) -> IntentPlan | None:
             "action": {"mode": "adjust_brightness", "delta": -10, "text": text},
         }
 
-    if "play pause" in lowered or "pause music" in lowered or "resume music" in lowered:
+    if "play pause" in lowered or "pause music" in lowered or "resume music" in lowered or "pause media" in lowered or "resume media" in lowered:
         return {
             "intent": INTENT_NAME,
             "response_preview": "Toggling playback.",
@@ -122,7 +162,7 @@ def match(text: str, lowered: str) -> IntentPlan | None:
             "action": {"mode": "media_key", "key": "prev", "text": text},
         }
 
-    open_match = re.match(r"(?:open|launch|start) (.+)", lowered)
+    open_match = re.match(r"(?:open|launch|start|pull up|bring up|open up) (.+)", lowered)
     if open_match:
         target = open_match.group(1).strip(" .")
         if target in APP_ALIASES:

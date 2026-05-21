@@ -13,12 +13,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import importlib
+from copy import deepcopy
 import pkgutil
 import re
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from .tool_interface import IntentPlan, IntentResult, IntentTool, validate_tool
+from .tool_interface import IntentExample, IntentPlan, IntentResult, IntentTool, validate_tool
 
 
 MatchFn = Callable[[str, str], IntentPlan | None]
@@ -34,6 +35,7 @@ class RegisteredTool:
     intent_name: str
     triggers: tuple[str, ...]
     ollama_description: str
+    examples: tuple[dict[str, Any], ...]
     match: MatchFn
     execute: ExecuteFn
     source: str
@@ -50,10 +52,12 @@ def _trigger_head(trigger: str) -> str:
 
 def _registered_from_module(tool: IntentTool, source: str) -> RegisteredTool:
     triggers = tuple(_normalize_trigger(trigger) for trigger in tool.TRIGGERS if _normalize_trigger(trigger))
+    examples = tuple(_normalize_example(example) for example in tool.EXAMPLES)
     return RegisteredTool(
         intent_name=tool.INTENT_NAME.strip().lower(),
         triggers=triggers,
         ollama_description=tool.OLLAMA_DESCRIPTION.strip(),
+        examples=examples,
         match=tool.match,
         execute=tool.execute,
         source=source,
@@ -105,10 +109,6 @@ def _build_registry() -> tuple[tuple[RegisteredTool, ...], dict[str, RegisteredT
     frozen_index = {key: tuple(value) for key, value in trigger_index.items()}
     return frozen_tools, {tool.intent_name: tool for tool in frozen_tools}, frozen_index
 
-
-_TOOLS, _TOOLS_BY_INTENT, _TRIGGER_INDEX = _build_registry()
-
-
 def tools() -> tuple[RegisteredTool, ...]:
     return _TOOLS
 
@@ -119,6 +119,10 @@ def get(intent_name: str) -> RegisteredTool | None:
 
 def descriptions() -> dict[str, str]:
     return {tool.intent_name: tool.ollama_description for tool in _TOOLS}
+
+
+def examples() -> dict[str, tuple[dict[str, Any], ...]]:
+    return {tool.intent_name: tuple(dict(example) for example in tool.examples) for tool in _TOOLS}
 
 
 def _candidate_heads(lowered: str) -> Iterable[str]:
@@ -137,3 +141,124 @@ def iter_triggered_tools(lowered: str) -> tuple[RegisteredTool, ...]:
                 seen.add(tool.intent_name)
                 matched.append(tool)
     return tuple(matched)
+
+
+def semantic_plan(text: str, *, confidence_threshold: float = 0.76) -> IntentPlan | None:
+    lowered = str(text or "").strip().lower()
+    if not lowered:
+        return None
+    normalized = _normalize_text(lowered)
+    query_tokens = _tokenize(normalized)
+    if not query_tokens:
+        return None
+
+    best_tool: RegisteredTool | None = None
+    best_example: dict[str, Any] | None = None
+    best_score = 0.0
+    second_score = 0.0
+
+    for tool in _TOOLS:
+        if tool.intent_name == "conversation":
+            continue
+        tool_score = 0.0
+        tool_example: dict[str, Any] | None = None
+        for example in tool.examples:
+            score = _score_example(normalized, query_tokens, example, tool)
+            if score > tool_score:
+                tool_score = score
+                tool_example = dict(example)
+        if tool_score > best_score:
+            second_score = best_score
+            best_score = tool_score
+            best_tool = tool
+            best_example = tool_example
+        elif tool_score > second_score:
+            second_score = tool_score
+
+    if best_tool is None or best_example is None:
+        return None
+    if best_score < confidence_threshold:
+        return None
+    if best_score - second_score < 0.05:
+        return None
+
+    plan = best_tool.match(text, lowered)
+    if plan is None:
+        action = best_example.get("action") if isinstance(best_example.get("action"), dict) else {}
+        if not action:
+            return None
+        plan = {
+            "intent": best_tool.intent_name,
+            "response_preview": str(best_example.get("response_preview", "") or "").strip(),
+            "action": deepcopy(action),
+        }
+
+    if not isinstance(plan, dict):
+        return None
+    if not isinstance(plan.get("action"), dict):
+        plan["action"] = {}
+    plan["action"].setdefault("text", text)
+    plan.setdefault("intent", best_tool.intent_name)
+    if not str(plan.get("response_preview", "") or "").strip():
+        preview = str(best_example.get("response_preview", "") or "").strip()
+        if preview:
+            plan["response_preview"] = preview
+    plan["_semantic"] = {
+        "score": round(best_score, 3),
+        "example": str(best_example.get("text", "") or "").strip(),
+        "intent": best_tool.intent_name,
+    }
+    return plan
+
+
+def _normalize_example(example: IntentExample) -> dict[str, Any]:
+    text = _normalize_text(str(example.get("text", "") or ""))
+    response_preview = " ".join(str(example.get("response_preview", "") or "").strip().split())
+    action = example.get("action") if isinstance(example.get("action"), dict) else {}
+    return {
+        "text": text,
+        "response_preview": response_preview,
+        "action": dict(action),
+    }
+
+
+def _normalize_text(text: str) -> str:
+    return " ".join(str(text).strip().lower().split())
+
+
+def _tokenize(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9_:/.-]+", text.lower())
+
+
+def _score_example(query: str, query_tokens: list[str], example: dict[str, Any], tool: RegisteredTool) -> float:
+    example_text = str(example.get("text", "") or "").strip().lower()
+    if not example_text:
+        return 0.0
+    if example_text == query:
+        return 1.0
+
+    example_tokens = _tokenize(example_text)
+    if not example_tokens:
+        return 0.0
+
+    query_set = set(query_tokens)
+    example_set = set(example_tokens)
+    shared = len(query_set & example_set)
+    union = len(query_set | example_set)
+    jaccard = shared / union if union else 0.0
+    overlap = shared / max(len(query_tokens), len(example_tokens), 1)
+    subseq_bonus = 0.12 if example_text in query or query in example_text else 0.0
+    prefix_bonus = 0.08 if query.startswith(example_text[: min(len(query), len(example_text))]) else 0.0
+    description_bonus = _description_bonus(query_tokens, tool.ollama_description)
+    return min(1.0, (jaccard * 0.52) + (overlap * 0.32) + subseq_bonus + prefix_bonus + description_bonus)
+
+
+def _description_bonus(query_tokens: list[str], description: str) -> float:
+    desc_tokens = set(_tokenize(description))
+    if not desc_tokens:
+        return 0.0
+    overlap = len(set(query_tokens) & desc_tokens) / max(len(query_tokens), 1)
+    return min(0.08, overlap * 0.08)
+
+
+_TOOLS, _TOOLS_BY_INTENT, _TRIGGER_INDEX = _build_registry()

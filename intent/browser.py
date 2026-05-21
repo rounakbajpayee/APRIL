@@ -33,6 +33,38 @@ TRIGGERS = [
     "https://",
 ]
 OLLAMA_DESCRIPTION = "Open websites or search the web or YouTube in the browser"
+EXAMPLES = [
+    {
+        "text": "open youtube",
+        "response_preview": "Opening YouTube.",
+        "action": {"mode": "open_url", "url": "https://www.youtube.com"},
+    },
+    {
+        "text": "pull up youtube",
+        "response_preview": "Opening YouTube.",
+        "action": {"mode": "open_url", "url": "https://www.youtube.com"},
+    },
+    {
+        "text": "go to github",
+        "response_preview": "Opening GitHub.",
+        "action": {"mode": "open_url", "url": "https://github.com"},
+    },
+    {
+        "text": "search for april project status",
+        "response_preview": "Searching the web for april project status.",
+        "action": {"mode": "search_web", "query": "april project status"},
+    },
+    {
+        "text": "look up laptop deals",
+        "response_preview": "Searching the web for laptop deals.",
+        "action": {"mode": "search_web", "query": "laptop deals"},
+    },
+    {
+        "text": "search youtube for lo fi jazz",
+        "response_preview": "Searching YouTube for lo fi jazz.",
+        "action": {"mode": "search_youtube", "query": "lo fi jazz"},
+    },
+]
 
 SITE_ALIASES = {
     "youtube": "https://www.youtube.com",
@@ -66,7 +98,7 @@ def match(text: str, lowered: str) -> IntentPlan | None:
                 "action": {"mode": "search_youtube", "query": query, "text": text},
             }
 
-    if lowered.startswith("search for ") or lowered.startswith("google "):
+    if lowered.startswith("search for ") or lowered.startswith("google ") or lowered.startswith("look up "):
         query = text.split(" ", 2)[-1].strip()
         return {
             "intent": INTENT_NAME,
@@ -74,7 +106,7 @@ def match(text: str, lowered: str) -> IntentPlan | None:
             "action": {"mode": "search_web", "query": query, "text": text},
         }
 
-    open_match = re.match(r"(?:open|go to) (.+)", lowered)
+    open_match = re.match(r"(?:open|go to|pull up|bring up|open up) (.+)", lowered)
     if open_match:
         target = open_match.group(1).strip(" .")
         if target in SITE_ALIASES:

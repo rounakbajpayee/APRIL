@@ -19,6 +19,28 @@ TRIGGERS = [
     "watch",
 ]
 OLLAMA_DESCRIPTION = "Play or continue media in Jellyfin"
+EXAMPLES = [
+    {
+        "text": "continue watching",
+        "response_preview": "Opening Jellyfin.",
+        "action": {"mode": "continue"},
+    },
+    {
+        "text": "play family guy",
+        "response_preview": "Looking that up in Jellyfin.",
+        "action": {"mode": "play", "title": "Family Guy"},
+    },
+    {
+        "text": "watch the office",
+        "response_preview": "Looking that up in Jellyfin.",
+        "action": {"mode": "play", "title": "The Office"},
+    },
+    {
+        "text": "resume the movie",
+        "response_preview": "Opening Jellyfin.",
+        "action": {"mode": "continue"},
+    },
+]
 
 
 def match(text: str, lowered: str) -> IntentPlan | None:

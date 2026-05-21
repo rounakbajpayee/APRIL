@@ -111,8 +111,10 @@ ANIM_STEP_MS = 16
 AUTO_COLLAPSE_MS = 7000
 MESSAGE_HOLD_MS = 9000
 COLLAPSED_SIZE = 46
-PANEL_WIDTH = 392
-PANEL_HEIGHT = 378
+PANEL_WIDTH = 560
+PANEL_HEIGHT = 640
+PANEL_MIN_WIDTH = 500
+PANEL_MIN_HEIGHT = 560
 PANEL_PAD = 16
 PANEL_RADIUS = 26
 PANEL_HEADER_H = 38
@@ -154,8 +156,15 @@ class APRILWidget:
         self._hwnd = None
         self._scale = 1.0
         self._panel_visible = False
+        self._panel_w = PANEL_WIDTH
+        self._panel_h = PANEL_HEIGHT
         self._history = []
         self._hovering = False
+        self._resizing = False
+        self._resize_start_x = 0
+        self._resize_start_y = 0
+        self._resize_start_w = 0
+        self._resize_start_h = 0
 
         self._build_window()
         self._build_fonts()
@@ -176,7 +185,7 @@ class APRILWidget:
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", True)
         self.root.attributes("-transparentcolor", TRANSPARENT)
-        self.root.resizable(False, False)
+        self.root.resizable(True, True)
         self.root.config(bg=TRANSPARENT, padx=0, pady=0)
         self.root.after(2000, self._keep_on_top)
         self.root.bind("<Enter>", self._on_hover_enter)
@@ -272,7 +281,7 @@ class APRILWidget:
             bd=0,
             highlightthickness=1,
             highlightbackground=FIELD_BORDER,
-            wraplength=320,
+            wraplength=420,
         )
 
         self.timeline_label = tk.Label(
@@ -304,6 +313,8 @@ class APRILWidget:
             state="disabled",
             cursor="arrow",
         )
+        self.output_scroll = tk.Scrollbar(self.panel_frame, orient="vertical", command=self.output_text.yview)
+        self.output_text.configure(yscrollcommand=self.output_scroll.set)
         self.output_text.tag_configure("user", foreground="#dce8f7", spacing1=6, spacing3=2)
         self.output_text.tag_configure("assistant", foreground="#f4f6f8", spacing1=6, spacing3=2)
         self.output_text.tag_configure("system", foreground=MUTED, spacing1=6, spacing3=2)
@@ -338,6 +349,14 @@ class APRILWidget:
             font=self.font_panel_bold,
             cursor="hand2",
         )
+        self.resize_grip = tk.Label(
+            self.panel_frame,
+            text="↘",
+            bg=PANEL_BG,
+            fg=MUTED,
+            font=self.font_node,
+            cursor="size_nw_se",
+        )
 
         self.input_entry.bind("<Return>", self._submit_text)
         self.input_entry.bind("<Escape>", lambda _event: self._collapse_text_panel())
@@ -353,11 +372,16 @@ class APRILWidget:
             self.open_loops_text,
             self.timeline_label,
             self.output_text,
+            self.output_scroll,
             self.input_entry,
             self.send_button,
+            self.resize_grip,
         ):
             widget.bind("<Enter>", self._on_hover_enter)
             widget.bind("<Leave>", self._on_hover_leave)
+        self.resize_grip.bind("<Button-1>", self._resize_start)
+        self.resize_grip.bind("<B1-Motion>", self._resize_motion)
+        self.resize_grip.bind("<ButtonRelease-1>", self._resize_end)
 
     def _make_summary_card(self, label_text):
         card = tk.Frame(
@@ -450,7 +474,7 @@ class APRILWidget:
         return ""
 
     def _text_panel_active(self):
-        return not self.config.get("voice", True)
+        return (not self.config.get("voice", True)) or self._panel_visible
 
     def _load_persisted_history(self):
         try:
@@ -569,8 +593,8 @@ class APRILWidget:
                 "label": "APRIL",
                 "node": "TEXT",
                 "message": "",
-                "w": PANEL_WIDTH,
-                "h": PANEL_HEIGHT,
+                "w": self._panel_w,
+                "h": self._panel_h,
                 "radius": PANEL_RADIUS,
                 "collapsed": False,
                 "panel": True,
@@ -746,11 +770,10 @@ class APRILWidget:
         frame_w = max(1, w - 2)
         frame_h = max(1, h - 2)
         inner_x = PANEL_PAD
-        inner_w = max(120, frame_w - PANEL_PAD * 2)
+        inner_w = max(160, frame_w - PANEL_PAD * 2)
         header_y = PANEL_PAD
         output_y = header_y + PANEL_HEADER_H
         input_y = frame_h - PANEL_PAD - PANEL_INPUT_H
-        output_h = max(80, input_y - output_y - PANEL_GAP)
         button_w = 66
         entry_w = inner_w - button_w - PANEL_GAP
 
@@ -766,12 +789,14 @@ class APRILWidget:
         self.card_reply["frame"].place(x=card_w + CARD_GAP, y=CARD_HEIGHT + CARD_GAP, width=inner_w - card_w - CARD_GAP, height=CARD_HEIGHT)
         loops_y = output_y + (CARD_HEIGHT * 2) + CARD_GAP + PANEL_GAP
         self.open_loops_label.place(x=inner_x, y=loops_y, width=120, height=16)
-        self.open_loops_text.place(x=inner_x, y=loops_y + 18, width=inner_w, height=52)
-        timeline_y = loops_y + 18 + 52 + PANEL_GAP
+        self.open_loops_text.place(x=inner_x, y=loops_y + 18, width=inner_w, height=72)
+        timeline_y = loops_y + 18 + 72 + PANEL_GAP
         self.timeline_label.place(x=inner_x, y=timeline_y, width=120, height=16)
-        self.output_text.place(x=inner_x, y=timeline_y + 18, width=inner_w, height=max(70, input_y - (timeline_y + 18) - PANEL_GAP))
+        self.output_text.place(x=inner_x, y=timeline_y + 18, width=inner_w - 2, height=max(220, input_y - (timeline_y + 18) - PANEL_GAP))
         self.input_entry.place(x=inner_x, y=input_y, width=entry_w, height=PANEL_INPUT_H)
         self.send_button.place(x=inner_x + entry_w + PANEL_GAP, y=input_y, width=button_w, height=PANEL_INPUT_H)
+        self.output_scroll.place(x=inner_x + inner_w - 14, y=timeline_y + 18, width=12, height=max(220, input_y - (timeline_y + 18) - PANEL_GAP))
+        self.resize_grip.place(x=frame_w - 20, y=frame_h - 20, width=16, height=16)
         self._refresh_summary_cards()
 
     def _hide_text_panel(self):
@@ -837,7 +862,15 @@ class APRILWidget:
         return "break"
 
     def _collapse_text_panel(self):
-        self._set_config("voice", True)
+        self._panel_visible = False
+        if not self.config.get("voice", True):
+            self._set_config("voice", True)
+        else:
+            self._redraw()
+
+    def _open_text_panel(self):
+        self._panel_visible = True
+        self._redraw()
 
     def _draw_round_rect(self, x1, y1, x2, y2, radius, fill, outline):
         r = radius
@@ -1047,7 +1080,8 @@ class APRILWidget:
     def _drag_start(self, event):
         if self._collapsed:
             self._collapsed = False
-            self._redraw()
+            self._open_text_panel()
+            return
         self._drag_x = event.x_root - self.root.winfo_x()
         self._drag_y = event.y_root - self.root.winfo_y()
 
@@ -1062,6 +1096,25 @@ class APRILWidget:
         self.config["widget_anchor_y"] = round(self._anchor_y, 1)
         self.config["widget_anchor_bottom_y"] = round(self._anchor_bottom_y, 1)
         self._write_config()
+
+    def _resize_start(self, event):
+        self._resizing = True
+        self._resize_start_x = event.x_root
+        self._resize_start_y = event.y_root
+        self._resize_start_w = self._panel_w
+        self._resize_start_h = self._panel_h
+
+    def _resize_motion(self, event):
+        if not self._resizing:
+            return
+        delta_w = event.x_root - self._resize_start_x
+        delta_h = event.y_root - self._resize_start_y
+        self._panel_w = max(PANEL_MIN_WIDTH, self._resize_start_w + delta_w)
+        self._panel_h = max(PANEL_MIN_HEIGHT, self._resize_start_h + delta_h)
+        self._redraw(animate=False)
+
+    def _resize_end(self, _event=None):
+        self._resizing = False
 
     def _on_hover_enter(self, _event=None):
         self._hovering = True

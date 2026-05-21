@@ -12,6 +12,7 @@ from debug_log import log_event
 from event_ledger import append_event
 from intent import execute_plan
 from memory import append_turn
+from semantic_store import record_semantic_example
 from observer import collect_runtime_observation
 from state_engine import refresh_state_snapshot
 from stt import transcribe_with_metadata
@@ -246,6 +247,25 @@ def handle_user_text(text: str, source: str = "text", request_id: int | None = N
         if _widget_ref is not None:
             _schedule_widget_config_refresh(config)
 
+    record_semantic_example(
+        kind="turn",
+        text=text,
+        source=source,
+        resolved_intent=str(plan.get("intent", "") or ""),
+        response=response,
+        action=plan.get("action") if isinstance(plan.get("action"), dict) else {},
+        outcome="success" if ok else "failure",
+        subject_type="utterance",
+        subject_ref=str(request_id or ""),
+        confidence=1.0 if ok else 0.6,
+        metadata={
+            "request_id": request_id,
+            "source": source,
+            "ok": ok,
+            "error_kind": error_kind,
+            "config_changed": bool(result.get("config_changed")),
+        },
+    )
     if response:
         print(f"[main] assistant response: {response}")
         log_event("assistant_response", source=source, response=response, request_id=request_id)

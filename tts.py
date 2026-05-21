@@ -10,7 +10,10 @@ from __future__ import annotations
 import os
 import subprocess
 import threading
-from typing import Any
+import shlex
+from typing import Any, Callable
+
+from session_manager import execute as execute_session_command
 
 
 _speak_lock = threading.Lock()
@@ -18,12 +21,14 @@ _process_lock = threading.Lock()
 _current_process = None
 
 
-def speak(text: str, config: dict[str, Any]) -> bool:
+def speak(text: str, config: dict[str, Any], on_done: Callable[[bool], None] | None = None) -> bool:
     clean = " ".join(str(text).strip().split())
     if not clean or not bool(config.get("voice", True)):
+        if on_done is not None:
+            on_done(False)
         return False
 
-    threading.Thread(target=_speak_blocking, args=(clean, dict(config)), daemon=True).start()
+    threading.Thread(target=_speak_blocking, args=(clean, dict(config), on_done), daemon=True).start()
     return True
 
 
@@ -40,16 +45,27 @@ def stop() -> None:
         return
 
 
-def _speak_blocking(text: str, config: dict[str, Any]) -> None:
+def _speak_blocking(text: str, config: dict[str, Any], on_done: Callable[[bool], None] | None = None) -> None:
     with _speak_lock:
         engine = resolve_engine(config)
+        ok = False
         try:
             if engine == "sapi":
                 _speak_sapi(text, config)
+                ok = True
+            elif engine == "say":
+                _speak_say(text, config)
+                ok = True
             else:
                 print(f"[tts] engine unavailable: {engine}")
         except Exception as exc:
             print(f"[tts] speak failed: {exc}")
+        finally:
+            if on_done is not None:
+                try:
+                    on_done(ok)
+                except Exception:
+                    pass
 
 
 def resolve_engine(config: dict[str, Any]) -> str:
@@ -100,3 +116,18 @@ def _speak_sapi(text: str, config: dict[str, Any]) -> None:
         with _process_lock:
             if _current_process is proc:
                 _current_process = None
+
+
+def _speak_say(text: str, config: dict[str, Any]) -> None:
+    if os.name == "nt":
+        node = str(config.get("tts_say_node", "mac") or "mac").strip().lower()
+        command = "say " + shlex.quote(text)
+        execute_session_command(node, command, config, timeout=int(config.get("tts_timeout_seconds", 20)))
+        return
+
+    startupinfo = None
+    if hasattr(subprocess, "STARTUPINFO"):
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = 0
+    subprocess.Popen(["say", text], startupinfo=startupinfo, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).wait()

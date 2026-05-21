@@ -21,6 +21,23 @@ TRIGGERS = [
     "take a screenshot",
 ]
 OLLAMA_DESCRIPTION = "Inspect the current screen or answer a question about it"
+EXAMPLES = [
+    {
+        "text": "what's on my screen",
+        "response_preview": "Checking the screen.",
+        "action": {"question": "what's on my screen"},
+    },
+    {
+        "text": "read my screen",
+        "response_preview": "Checking the screen.",
+        "action": {"question": "read my screen"},
+    },
+    {
+        "text": "what's this error",
+        "response_preview": "Checking the screen.",
+        "action": {"question": "what's this error"},
+    },
+]
 
 
 def match(text: str, lowered: str) -> IntentPlan | None:

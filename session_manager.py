@@ -113,6 +113,7 @@ def _execute_remote(node: str, command: str, config: dict[str, Any], timeout: in
 
     host = str(config.get(f"{node}_ssh_host", "") or "").strip()
     user = str(config.get(f"{node}_ssh_user", "") or "").strip()
+    key_path = str(config.get(f"{node}_ssh_key", "") or "").strip()
     if not host or not user:
         return {
             "ok": False,
@@ -125,7 +126,15 @@ def _execute_remote(node: str, command: str, config: dict[str, Any], timeout: in
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     try:
-        client.connect(host, username=user, timeout=timeout)
+        connect_kwargs: dict[str, Any] = {
+            "username": user,
+            "timeout": timeout,
+            "allow_agent": True,
+            "look_for_keys": True,
+        }
+        if key_path:
+            connect_kwargs["key_filename"] = os.path.expanduser(key_path)
+        client.connect(host, **connect_kwargs)
         _, stdout, stderr = client.exec_command(command, timeout=timeout)
         stdout_text = stdout.read().decode("utf-8", errors="replace").strip()
         stderr_text = stderr.read().decode("utf-8", errors="replace").strip()

@@ -12,6 +12,7 @@ This script focuses on the local, repeatable parts of the MVP:
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import types
 import unittest
@@ -23,7 +24,10 @@ import event_ledger
 import device_control
 import learning
 import main
+import semantic_store
 import state_engine
+import session_manager
+import tts
 from intent import config_intent, execute_plan
 
 
@@ -31,6 +35,7 @@ BASE_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = BASE_DIR / "config.json"
 LEARNING_PATH = BASE_DIR / "learned_phrases.json"
 MEMORY_PATH = BASE_DIR / "memory.json"
+SEMANTIC_PATH = BASE_DIR / "state" / "semantic_records.jsonl"
 LOG_PATH = BASE_DIR / "logs" / "debug.jsonl"
 LEDGER_PATH = BASE_DIR / "state" / "events.jsonl"
 SNAPSHOT_PATH = BASE_DIR / "state" / "context_snapshot.json"
@@ -64,6 +69,7 @@ class AprilStressTests(unittest.TestCase):
             ManagedFile(CONFIG_PATH),
             ManagedFile(LEARNING_PATH),
             ManagedFile(MEMORY_PATH),
+            ManagedFile(SEMANTIC_PATH),
             ManagedFile(LOG_PATH),
             ManagedFile(LEDGER_PATH),
             ManagedFile(SNAPSHOT_PATH),
@@ -79,16 +85,19 @@ class AprilStressTests(unittest.TestCase):
             (CONFIG_PATH, "{}\n"),
             (LEARNING_PATH, "[]\n"),
             (MEMORY_PATH, '{"turns": []}\n'),
+            (SEMANTIC_PATH, ""),
             (LOG_PATH, ""),
             (LEDGER_PATH, ""),
         ):
             path.write_text(empty_text, encoding="utf-8")
 
         learning._rules_cache = None
+        semantic_store._records_cache = None
         self.config = json.loads((BASE_DIR / "config_defaults.json").read_text(encoding="utf-8"))
 
     def tearDown(self):
         learning._rules_cache = None
+        semantic_store._records_cache = None
         for item in reversed(self._managed_files):
             item.__exit__(None, None, None)
 
@@ -106,6 +115,15 @@ class AprilStressTests(unittest.TestCase):
                 plan = brain.process(text, self.config)
                 self.assertEqual(plan["intent"], expected_intent)
                 self.assertIsInstance(plan.get("action"), dict)
+
+    def test_conversation_question_stays_conversation(self):
+        plan = brain.process("what is the population of India", self.config)
+        self.assertEqual(plan["intent"], "conversation")
+
+    def test_pause_media_routes_to_device(self):
+        plan = brain.process("Pause Media", self.config)
+        self.assertEqual(plan["intent"], "device")
+        self.assertEqual(plan["action"].get("mode"), "media_key")
 
     def test_learning_round_trip_rewrites_phrases(self):
         learning.remember_phrase("movie time", "open jellyfin")
@@ -331,6 +349,58 @@ class AprilStressTests(unittest.TestCase):
         self.assertEqual(reply, "Volume set to 70 percent.")
         volume.SetMasterVolumeLevelScalar.assert_called_once_with(0.7, None)
 
+    def test_open_app_uses_visible_windows_launcher(self):
+        with mock.patch("device_control.subprocess.Popen") as popen:
+            reply = device_control.open_app("notepad")
+        self.assertEqual(reply, "Opening notepad.")
+        popen.assert_called()
+
+    def test_remote_shell_uses_configured_key_path(self):
+        fake_client = mock.MagicMock()
+        fake_stdout = mock.MagicMock()
+        fake_stderr = mock.MagicMock()
+        fake_stdout.read.return_value = b""
+        fake_stderr.read.return_value = b""
+        fake_stdout.channel.recv_exit_status.return_value = 0
+
+        class FakeParamiko:
+            class SSHClient:
+                def __init__(self):
+                    self._client = fake_client
+
+                def set_missing_host_key_policy(self, _policy):
+                    return None
+
+                def connect(self, *args, **kwargs):
+                    return fake_client.connect(*args, **kwargs)
+
+                def exec_command(self, *args, **kwargs):
+                    fake_client.exec_command(*args, **kwargs)
+                    return None, fake_stdout, fake_stderr
+
+                def close(self):
+                    return None
+
+            class AutoAddPolicy:
+                pass
+
+        with mock.patch.dict("sys.modules", {"paramiko": FakeParamiko()}):
+            result = session_manager._execute_remote(
+                "mac",
+                "hostname",
+                {"mac_ssh_host": "example.local", "mac_ssh_user": "alice", "mac_ssh_key": "~/.ssh/id_ed25519"},
+                timeout=5,
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(fake_client.connect.call_args.kwargs["key_filename"], os.path.expanduser("~/.ssh/id_ed25519"))
+
+    def test_say_engine_routes_over_ssh(self):
+        with mock.patch("tts.execute_session_command") as executor:
+            tts._speak_say("hello from april", {"tts_say_node": "mac", "tts_timeout_seconds": 9})
+        executor.assert_called_once()
+        self.assertIn("say", executor.call_args.args[1])
+
     def test_main_records_failure_and_discard_events(self):
         with (
             mock.patch("main.collect_runtime_observation", return_value={"foreground": {"window_title": "Codex", "app_hint": "Codex"}}),
@@ -382,6 +452,29 @@ class AprilStressTests(unittest.TestCase):
         event = transcript_events[-1]
         self.assertEqual(event.get("stt_source"), "remote")
         self.assertEqual(event.get("stt_model"), "whisper-1")
+
+    def test_semantic_store_can_recall_confirmed_phrases(self):
+        semantic_store.record_semantic_example(
+            kind="turn",
+            text="open project docs folder",
+            source="text",
+            resolved_intent="shell",
+            response="Opening the project docs folder.",
+            action={"mode": "natural", "node": "local", "text": "open project docs folder"},
+            outcome="success",
+            subject_type="utterance",
+            subject_ref="1",
+            confidence=1.0,
+        )
+        plan = semantic_store.semantic_plan("open the project documents directory")
+        self.assertEqual(plan["intent"], "shell")
+        self.assertEqual(plan["action"].get("mode"), "natural")
+
+    def test_semantic_router_uses_examples_for_paraphrases(self):
+        plan = brain.process("pull up youtube", self.config)
+        self.assertEqual(plan["intent"], "browser")
+        self.assertEqual(plan["action"].get("mode"), "open_url")
+        self.assertIn("youtube", str(plan["action"].get("url", "")).lower())
 
 
 if __name__ == "__main__":

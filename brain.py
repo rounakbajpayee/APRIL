@@ -83,6 +83,9 @@ def process(text: str, config: dict[str, Any]) -> dict[str, Any]:
     if local_plan:
         return local_plan
 
+    if _looks_like_conversation_question(clean):
+        return _conversation_plan(clean, "")
+
     llm_plan = _ollama_intent_plan(clean, config)
     if llm_plan:
         return llm_plan
@@ -275,6 +278,10 @@ def _local_plan(text: str) -> dict[str, Any] | None:
         if plan:
             return plan
 
+    learned_plan = intent_registry.semantic_plan(text)
+    if learned_plan:
+        return learned_plan
+
     return None
 
 
@@ -373,316 +380,6 @@ def _planner_action_rules(intent_registry: Any) -> list[str]:
     return lines
 
 
-def _config_plan(text: str, lowered: str) -> dict[str, Any] | None:
-    teach_match = re.match(r"(?:learn that|remember that)\s+(.+?)\s+means\s+(.+)", text, re.IGNORECASE)
-    if not teach_match:
-        teach_match = re.match(r"when i say\s+(.+?),?\s+(?:do|mean)\s+(.+)", text, re.IGNORECASE)
-    if teach_match:
-        heard = teach_match.group(1).strip(" .")
-        means = teach_match.group(2).strip(" .")
-        if heard and means:
-            return {
-                "intent": "config",
-                "response_preview": "I'll remember that phrasing.",
-                "action": {
-                    "mode": "teach_phrase",
-                    "heard": heard,
-                    "means": means,
-                    "text": text,
-                },
-            }
-
-    updates: dict[str, Any] = {}
-    preview = ""
-
-    if any(phrase in lowered for phrase in ("turn off voice", "disable voice", "mute yourself", "stop talking")):
-        updates["voice"] = False
-        preview = "Turning voice off."
-    elif any(phrase in lowered for phrase in ("turn on voice", "enable voice", "use voice again", "speak again")):
-        updates["voice"] = True
-        preview = "Turning voice on."
-
-    if any(phrase in lowered for phrase in ("i'm leaving home", "i am leaving home", "away mode", "not at home")):
-        updates["at_home"] = False
-        preview = preview or "Switching to away mode."
-    elif any(phrase in lowered for phrase in ("i'm home", "i am home", "back home")):
-        updates["at_home"] = True
-        preview = preview or "Switching to home mode."
-
-    if any(phrase in lowered for phrase in ("show terminal", "show the terminal")):
-        updates["terminal_visible"] = True
-        preview = preview or "Showing terminal panes."
-    elif any(phrase in lowered for phrase in ("hide terminal", "hide the terminal")):
-        updates["terminal_visible"] = False
-        preview = preview or "Hiding terminal panes."
-
-    if "switch to sapi" in lowered or "use sapi" in lowered:
-        updates["tts_engine"] = "sapi"
-        preview = preview or "Switching to SAPI voice."
-    elif "switch to auto voice" in lowered or "use auto voice" in lowered or "switch to auto" in lowered:
-        updates["tts_engine"] = "auto"
-        preview = preview or "Switching voice routing to auto."
-    elif "switch to wsl voice" in lowered or "use espeak" in lowered:
-        updates["tts_engine"] = "espeak"
-        preview = preview or "Switching to eSpeak."
-
-    if not updates:
-        return None
-
-    return {
-        "intent": "config",
-        "response_preview": preview,
-        "action": {
-            "updates": updates,
-            "text": text,
-        },
-    }
-
-
-def _device_plan(text: str, lowered: str) -> dict[str, Any] | None:
-    match = re.search(r"(?:set )?volume(?: to)? (\d{1,3})", lowered)
-    if match:
-        level = max(0, min(100, int(match.group(1))))
-        return {
-            "intent": "device",
-            "response_preview": f"Setting volume to {level} percent.",
-            "action": {"mode": "set_volume", "level": level, "text": text},
-        }
-
-    if "mute" in lowered and "unmute" not in lowered:
-        return {
-            "intent": "device",
-            "response_preview": "Muting audio.",
-            "action": {"mode": "media_key", "key": "mute", "text": text},
-        }
-    if "unmute" in lowered:
-        return {
-            "intent": "device",
-            "response_preview": "Toggling mute.",
-            "action": {"mode": "media_key", "key": "mute", "text": text},
-        }
-    if "volume up" in lowered or "increase volume" in lowered:
-        return {
-            "intent": "device",
-            "response_preview": "Turning the volume up.",
-            "action": {"mode": "adjust_volume", "delta": 10, "text": text},
-        }
-    if "volume down" in lowered or "decrease volume" in lowered or "lower volume" in lowered:
-        return {
-            "intent": "device",
-            "response_preview": "Turning the volume down.",
-            "action": {"mode": "adjust_volume", "delta": -10, "text": text},
-        }
-
-    match = re.search(r"(?:set )?brightness(?: to)? (\d{1,3})", lowered)
-    if match:
-        level = max(0, min(100, int(match.group(1))))
-        return {
-            "intent": "device",
-            "response_preview": f"Setting brightness to {level} percent.",
-            "action": {"mode": "set_brightness", "level": level, "text": text},
-        }
-    if "increase brightness" in lowered:
-        return {
-            "intent": "device",
-            "response_preview": "Increasing brightness.",
-            "action": {"mode": "adjust_brightness", "delta": 10, "text": text},
-        }
-    if "decrease brightness" in lowered or "lower brightness" in lowered:
-        return {
-            "intent": "device",
-            "response_preview": "Decreasing brightness.",
-            "action": {"mode": "adjust_brightness", "delta": -10, "text": text},
-        }
-
-    if "play pause" in lowered or "pause music" in lowered or "resume music" in lowered:
-        return {
-            "intent": "device",
-            "response_preview": "Toggling playback.",
-            "action": {"mode": "media_key", "key": "play_pause", "text": text},
-        }
-    if "next track" in lowered or "skip track" in lowered:
-        return {
-            "intent": "device",
-            "response_preview": "Skipping to the next track.",
-            "action": {"mode": "media_key", "key": "next", "text": text},
-        }
-    if "previous track" in lowered or "last track" in lowered:
-        return {
-            "intent": "device",
-            "response_preview": "Going back a track.",
-            "action": {"mode": "media_key", "key": "prev", "text": text},
-        }
-
-    open_match = re.match(r"(?:open|launch|start) (.+)", lowered)
-    if open_match:
-        target = open_match.group(1).strip(" .")
-        if target in APP_ALIASES:
-            return {
-                "intent": "device",
-                "response_preview": f"Opening {target}.",
-                "action": {"mode": "open_app", "app": target, "text": text},
-            }
-
-    return None
-
-
-def _browser_plan(text: str, lowered: str) -> dict[str, Any] | None:
-    if url := _extract_url(text):
-        return {
-            "intent": "browser",
-            "response_preview": f"Opening {url}.",
-            "action": {"mode": "open_url", "url": url, "text": text},
-        }
-
-    if any(marker in lowered for marker in ("search youtube for ", "youtube search for ", "find on youtube ")):
-        query = lowered
-        for marker in ("search youtube for ", "youtube search for ", "find on youtube "):
-            if marker in query:
-                query = query.split(marker, 1)[1].strip(" .")
-                break
-        if query:
-            return {
-                "intent": "browser",
-                "response_preview": f"Searching YouTube for {query}.",
-                "action": {"mode": "search_youtube", "query": query, "text": text},
-            }
-
-    if lowered.startswith("search for ") or lowered.startswith("google "):
-        query = text.split(" ", 2)[-1].strip()
-        return {
-            "intent": "browser",
-            "response_preview": f"Searching the web for {query}.",
-            "action": {"mode": "search_web", "query": query, "text": text},
-        }
-
-    open_match = re.match(r"(?:open|go to) (.+)", lowered)
-    if open_match:
-        target = open_match.group(1).strip(" .")
-        if target in SITE_ALIASES:
-            return {
-                "intent": "browser",
-                "response_preview": f"Opening {target}.",
-                "action": {"mode": "open_url", "url": SITE_ALIASES[target], "text": text},
-            }
-        if "." in target and " " not in target:
-            url = target if target.startswith(("http://", "https://")) else f"https://{target}"
-            return {
-                "intent": "browser",
-                "response_preview": f"Opening {target}.",
-                "action": {"mode": "open_url", "url": url, "text": text},
-            }
-
-    return None
-
-
-def _vision_plan(text: str, lowered: str) -> dict[str, Any] | None:
-    markers = [
-        "what's on my screen",
-        "what is on my screen",
-        "what's this error",
-        "what is this error",
-        "read this for me",
-        "read my screen",
-        "take a screenshot",
-    ]
-    if any(marker in lowered for marker in markers):
-        return {
-            "intent": "vision",
-            "response_preview": "Checking the screen.",
-            "action": {"question": text, "text": text},
-        }
-    return None
-
-
-def _media_plan(text: str, lowered: str) -> dict[str, Any] | None:
-    if "continue what i was watching" in lowered or "continue watching" in lowered:
-        return {
-            "intent": "media",
-            "response_preview": "Opening Jellyfin.",
-            "action": {"mode": "continue", "text": text},
-        }
-    if "jellyfin" in lowered or lowered.startswith(("play ", "watch ")):
-        title = text
-        for prefix in ("play ", "watch "):
-            if lowered.startswith(prefix):
-                title = text[len(prefix):].strip()
-                break
-        return {
-            "intent": "media",
-            "response_preview": "Looking that up in Jellyfin.",
-            "action": {"mode": "play", "title": title, "text": text},
-        }
-    return None
-
-
-def _shell_plan(text: str, lowered: str) -> dict[str, Any] | None:
-    node = _detect_node(lowered)
-
-    if lowered.startswith("connect to "):
-        target = lowered.split("connect to ", 1)[1].strip(" .")
-        if target in {"mac", "dell", "local"}:
-            return {
-                "intent": "shell",
-                "response_preview": f"Checking {target}.",
-                "action": {"mode": "check_connection", "node": target, "text": text},
-            }
-
-    if lowered.startswith("run ") or lowered.startswith("execute "):
-        command = text.split(" ", 1)[1].strip()
-        command = _strip_trailing_node_selector(command)
-        return {
-            "intent": "shell",
-            "response_preview": f"Running that on {node}.",
-            "action": {"mode": "command", "node": node, "command": command, "text": text},
-        }
-
-    simple_phrases = (
-        "what's in",
-        "what is in",
-        "list files",
-        "show files",
-        "current directory",
-        "working directory",
-        "who am i",
-        "check network load",
-        "disk usage",
-        "memory usage",
-    )
-    if any(phrase in lowered for phrase in simple_phrases):
-        return {
-            "intent": "shell",
-            "response_preview": f"Checking that on {node}.",
-            "action": {"mode": "natural", "node": node, "text": text},
-        }
-
-    return None
-
-
-def _detect_node(lowered: str) -> str:
-    if " on mac" in lowered or lowered.endswith(" mac"):
-        return "mac"
-    if " on dell" in lowered or lowered.endswith(" dell"):
-        return "dell"
-    if " locally" in lowered or " on local" in lowered or lowered.endswith(" local"):
-        return "local"
-    return "local"
-
-
-def _strip_trailing_node_selector(command: str) -> str:
-    for suffix in (" on mac", " on dell", " on local"):
-        if command.lower().endswith(suffix):
-            return command[: -len(suffix)].strip()
-    return command
-
-
-def _extract_url(text: str) -> str:
-    match = re.search(r"(https?://[^\s]+)", text)
-    if match:
-        return match.group(1)
-    return ""
-
-
 def _extract_json_object(content: str) -> dict[str, Any] | None:
     clean = content.strip()
     if clean.startswith("```"):
@@ -746,6 +443,26 @@ def _looks_like_model_question(lowered: str) -> bool:
         "module are you using",
     ]
     return any(marker in lowered for marker in markers)
+
+
+def _looks_like_conversation_question(text: str) -> bool:
+    lowered = text.lower().strip()
+    if not lowered:
+        return False
+    if _looks_like_time_question(lowered) or _looks_like_model_question(lowered):
+        return False
+
+    if lowered.startswith(("what is ", "what are ", "who is ", "who are ", "how many ", "how much ", "tell me ", "explain ")):
+        if any(marker in lowered for marker in ("on my screen", "current directory", "working directory", "documents folder", "downloads folder", "desktop folder", "open ", "run ", "go to ", "search ", "launch ", "start ", "volume", "brightness", "pause ", "mute ", "voice ", "terminal")):
+            return False
+        return True
+
+    if lowered.endswith("?"):
+        if any(marker in lowered for marker in ("open ", "search ", "run ", "connect to ", "volume", "brightness", "pause ", "mute ", "play ")):
+            return False
+        return True
+
+    return False
 
 
 def _load_prompt_files(config: dict[str, Any]) -> str:

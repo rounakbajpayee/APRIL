@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import os
 import re
+from pathlib import Path
 from typing import Any
 
 from brain import summarize_output
@@ -30,6 +31,38 @@ TRIGGERS = [
     "memory usage",
 ]
 OLLAMA_DESCRIPTION = "Run shell commands locally or on configured remote nodes"
+EXAMPLES = [
+    {
+        "text": "who am i on local",
+        "response_preview": "Checking that on local.",
+        "action": {"mode": "natural", "node": "local"},
+    },
+    {
+        "text": "list files",
+        "response_preview": "Checking that on local.",
+        "action": {"mode": "natural", "node": "local"},
+    },
+    {
+        "text": "what's in the documents folder",
+        "response_preview": "Checking that on local.",
+        "action": {"mode": "natural", "node": "local"},
+    },
+    {
+        "text": "open my documents folder",
+        "response_preview": "Checking that on local.",
+        "action": {"mode": "natural", "node": "local"},
+    },
+    {
+        "text": "run git status on local",
+        "response_preview": "Running that on local.",
+        "action": {"mode": "command", "node": "local", "command": "git status"},
+    },
+    {
+        "text": "connect to mac",
+        "response_preview": "Checking mac.",
+        "action": {"mode": "check_connection", "node": "mac"},
+    },
+]
 
 
 def match(text: str, lowered: str) -> IntentPlan | None:
@@ -145,6 +178,10 @@ def _strip_trailing_node_selector(command: str) -> str:
 def infer_command(text: str, node: str) -> str:
     lowered = text.lower()
     is_windows = node == "local" and os.name == "nt"
+    user_home = Path.home()
+    documents_dir = user_home / "Documents"
+    downloads_dir = user_home / "Downloads"
+    desktop_dir = user_home / "Desktop"
 
     if any(phrase in lowered for phrase in ("current directory", "working directory", "where am i")):
         return "Get-Location" if is_windows else "pwd"
@@ -167,6 +204,24 @@ def infer_command(text: str, node: str) -> str:
 
     if any(phrase in lowered for phrase in ("list files", "show files")):
         return "Get-ChildItem -Force" if is_windows else "ls -la"
+
+    if any(phrase in lowered for phrase in ("documents folder", "documents directory", "my documents", "open documents")):
+        if is_windows:
+            safe_path = str(documents_dir).replace("'", "''")
+            return f"Get-ChildItem -Force -LiteralPath '{safe_path}'"
+        return f"ls -la {str(documents_dir)!r}"
+
+    if any(phrase in lowered for phrase in ("downloads folder", "downloads directory", "my downloads", "open downloads")):
+        if is_windows:
+            safe_path = str(downloads_dir).replace("'", "''")
+            return f"Get-ChildItem -Force -LiteralPath '{safe_path}'"
+        return f"ls -la {str(downloads_dir)!r}"
+
+    if any(phrase in lowered for phrase in ("desktop folder", "desktop directory", "my desktop", "open desktop")):
+        if is_windows:
+            safe_path = str(desktop_dir).replace("'", "''")
+            return f"Get-ChildItem -Force -LiteralPath '{safe_path}'"
+        return f"ls -la {str(desktop_dir)!r}"
 
     path_match = re.search(r"(?:what's in|what is in)\s+(.+)", lowered)
     if path_match:

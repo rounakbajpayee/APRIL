@@ -27,6 +27,7 @@ TRIGGERS = [
     "show terminal",
     "hide terminal",
     "switch to sapi",
+    "switch to say",
     "switch to auto voice",
     "switch to wsl voice",
     "learn that",
@@ -34,6 +35,43 @@ TRIGGERS = [
     "when i say",
 ]
 OLLAMA_DESCRIPTION = "Update APRIL configuration, voice settings, or teach phrase rewrites"
+EXAMPLES = [
+    {
+        "text": "turn off voice",
+        "response_preview": "Turning voice off.",
+        "action": {"updates": {"voice": False}},
+    },
+    {
+        "text": "turn on voice",
+        "response_preview": "Turning voice on.",
+        "action": {"updates": {"voice": True}},
+    },
+    {
+        "text": "show terminal",
+        "response_preview": "Showing terminal panes.",
+        "action": {"updates": {"terminal_visible": True}},
+    },
+    {
+        "text": "hide terminal",
+        "response_preview": "Hiding terminal panes.",
+        "action": {"updates": {"terminal_visible": False}},
+    },
+    {
+        "text": "switch to auto voice",
+        "response_preview": "Switching voice routing to auto.",
+        "action": {"updates": {"tts_engine": "auto"}},
+    },
+    {
+        "text": "switch to say",
+        "response_preview": "Switching to say.",
+        "action": {"updates": {"tts_engine": "say"}},
+    },
+    {
+        "text": "learn that movie time means open jellyfin",
+        "response_preview": "I'll remember that phrasing.",
+        "action": {"mode": "teach_phrase", "heard": "movie time", "means": "open jellyfin"},
+    },
+]
 
 
 def match(text: str, lowered: str) -> IntentPlan | None:
@@ -82,6 +120,9 @@ def match(text: str, lowered: str) -> IntentPlan | None:
     if "switch to sapi" in lowered or "use sapi" in lowered:
         updates["tts_engine"] = "sapi"
         preview = preview or "Switching to SAPI voice."
+    elif "switch to say" in lowered or "use say" in lowered:
+        updates["tts_engine"] = "say"
+        preview = preview or "Switching to mac say."
     elif "switch to auto voice" in lowered or "use auto voice" in lowered or "switch to auto" in lowered:
         updates["tts_engine"] = "auto"
         preview = preview or "Switching voice routing to auto."

@@ -5,6 +5,7 @@ device_control.py - Lightweight Windows device controls for APRIL phase 1.
 from __future__ import annotations
 
 import ctypes
+import os
 import subprocess
 import webbrowser
 from typing import Any
@@ -115,13 +116,22 @@ def open_app(app_name: str) -> str:
         webbrowser.open(target)
     else:
         try:
-            subprocess.Popen(
-                [target],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                startupinfo=_startupinfo(),
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            )
+            if os.name == "nt":
+                subprocess.Popen(
+                    ["cmd", "/c", "start", "", target],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    startupinfo=_startupinfo(),
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+            else:
+                subprocess.Popen(
+                    [target],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    startupinfo=_startupinfo(),
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
         except Exception as exc:
             return f"I couldn't open {clean}: {exc}"
     return f"Opening {clean}."

@@ -13,6 +13,7 @@ from .tool_interface import IntentPlan, IntentResult
 INTENT_NAME = "conversation"
 TRIGGERS: list[str] = []
 OLLAMA_DESCRIPTION = "Handle general conversation and fallback replies"
+EXAMPLES: list[dict[str, Any]] = []
 
 
 def match(_text: str, _lowered: str) -> IntentPlan | None:

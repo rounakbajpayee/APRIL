@@ -332,6 +332,14 @@ def _event_summary(event: dict[str, Any]) -> str:
         return f"Replied: {response}" if response else ""
     if event_type == "response_discarded":
         return "Discarded an outdated response."
+    if event_type == "semantic_example_recorded":
+        kind = str(payload.get("kind", "") or "").strip()
+        intent = str(payload.get("resolved_intent", "") or "").strip()
+        if kind and intent:
+            return f"Stored semantic example for {kind} -> {intent}."
+        if kind:
+            return f"Stored semantic example for {kind}."
+        return "Stored semantic example."
     if event_type == "config_changed":
         updates = payload.get("updates", {})
         if isinstance(updates, dict) and updates:

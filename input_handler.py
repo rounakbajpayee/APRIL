@@ -13,6 +13,8 @@ import threading
 import time
 import wave
 
+from tts import speak as speak_reply
+
 
 TRIGGER_KEY_NAME = "Key.f23"
 DEFAULT_SAMPLE_RATE = 16000
@@ -374,8 +376,16 @@ class InputHandler:
                     if hasattr(self.widget, "add_text_output"):
                         self.widget.add_text_output(response)
                     self.widget.set_state("speaking", response, node="local")
-                    time.sleep(1.4)
-                    self.widget.set_state("idle", response, node="local")
+                    if bool(self.config.get("voice", True)):
+                        started = speak_reply(
+                            response,
+                            self.config,
+                            on_done=lambda _ok: self.widget.set_state("idle", response, node="local"),
+                        )
+                        if not started:
+                            self.widget.set_state("idle", response, node="local")
+                    else:
+                        self.widget.set_state("idle", response, node="local")
                     return
             else:
                 self.widget.set_state("speaking", "audio captured", node="local")
