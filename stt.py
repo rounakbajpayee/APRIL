@@ -18,6 +18,7 @@ from typing import Any
 
 DEFAULT_TIMEOUT_SECONDS = 20
 BASE_DIR = Path(__file__).resolve().parent
+_LAST_TRANSCRIPTION_META: dict[str, str] = {}
 
 
 class TranscriptionError(RuntimeError):
@@ -25,35 +26,46 @@ class TranscriptionError(RuntimeError):
 
 
 def transcribe(audio_bytes: bytes, config: dict[str, Any]) -> str:
+    transcript, _meta = transcribe_with_metadata(audio_bytes, config)
+    return transcript
+
+
+def transcribe_with_metadata(audio_bytes: bytes, config: dict[str, Any]) -> tuple[str, dict[str, str]]:
     """
     Convert WAV audio bytes into text.
 
     Returns an empty string when no transcript can be produced.
     """
     if not audio_bytes:
-        return ""
+        return "", {}
 
     prefer_local = str(config.get("stt_mode", "remote_first") or "remote_first").strip().lower() != "remote_first"
     whisper_host = str(config.get("whisper_host", "") or "").strip()
 
     attempts = []
     if prefer_local:
-        attempts.append(("local", lambda: _transcribe_local(audio_bytes)))
+        attempts.append(("local", lambda: _transcribe_local(audio_bytes, config)))
         if whisper_host:
             attempts.append(("remote", lambda: _transcribe_remote(audio_bytes, whisper_host)))
     else:
         if whisper_host:
             attempts.append(("remote", lambda: _transcribe_remote(audio_bytes, whisper_host)))
-        attempts.append(("local", lambda: _transcribe_local(audio_bytes)))
+        attempts.append(("local", lambda: _transcribe_local(audio_bytes, config)))
 
-    for _, attempt in attempts:
+    last_meta: dict[str, str] = {}
+    for source, attempt in attempts:
+        last_meta = _resolve_transcription_meta(source, config)
         try:
             text = attempt()
         except Exception:
             continue
         if text.strip():
-            return text
-    return ""
+            global _LAST_TRANSCRIPTION_META
+            _LAST_TRANSCRIPTION_META = last_meta
+            return text, last_meta
+
+    _LAST_TRANSCRIPTION_META = last_meta
+    return "", last_meta
 
 
 def _transcribe_remote(audio_bytes: bytes, whisper_host: str) -> str:
@@ -95,13 +107,13 @@ def _extract_text(response) -> str:
     return body
 
 
-def _transcribe_local(audio_bytes: bytes) -> str:
+def _transcribe_local(audio_bytes: bytes, config: dict[str, Any]) -> str:
     whisper_path = _find_whisper_executable()
     if not whisper_path:
         raise TranscriptionError("local whisper CLI not found")
-    model_name = str(_config_value("stt_local_model", "small.en")).strip() or "small.en"
-    language = str(_config_value("stt_language", "en")).strip() or "en"
-    initial_prompt = str(_config_value("stt_initial_prompt", "APRIL")).strip()
+    model_name = str(config.get("stt_local_model", "small.en") or "small.en").strip() or "small.en"
+    language = str(config.get("stt_language", "en") or "en").strip() or "en"
+    initial_prompt = str(config.get("stt_initial_prompt", "APRIL") or "APRIL").strip()
 
     with tempfile.TemporaryDirectory(prefix="april-stt-") as temp_dir:
         audio_path = os.path.join(temp_dir, "april_input.wav")
@@ -140,6 +152,20 @@ def _transcribe_local(audio_bytes: bytes) -> str:
             raise TranscriptionError("local whisper did not write a transcript")
         with open(transcript_path, encoding="utf-8") as handle:
             return handle.read().strip()
+
+
+def _resolve_transcription_meta(source: str, config: dict[str, Any]) -> dict[str, str]:
+    source = str(source or "").strip().lower()
+    if source == "remote":
+        return {
+            "stt_source": "remote",
+            "stt_model": "whisper-1",
+            "stt_host": str(config.get("whisper_host", "") or "").strip(),
+        }
+    return {
+        "stt_source": "local",
+        "stt_model": str(config.get("stt_local_model", "small.en") or "small.en").strip() or "small.en",
+    }
 
 
 def _find_whisper_executable() -> str | None:

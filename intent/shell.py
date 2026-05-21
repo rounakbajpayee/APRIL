@@ -9,7 +9,7 @@ import re
 from typing import Any
 
 from brain import summarize_output
-from session_manager import describe_node, execute
+from session_manager import describe_node, execute as execute_session_command
 from .tool_interface import IntentPlan, IntentResult
 
 
@@ -95,7 +95,7 @@ def execute(action: dict[str, Any], config: dict[str, Any], context: dict[str, A
             "error_kind": "shell_command_missing",
         }
 
-    result = execute(node, command, config, timeout=int(config.get("shell_timeout_seconds", 20)))
+    result = execute_session_command(node, command, config, timeout=int(config.get("shell_timeout_seconds", 20)))
     output = str(result.get("output", "") or "").strip()
     target = describe_node(node)
 

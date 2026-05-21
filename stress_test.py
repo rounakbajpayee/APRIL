@@ -233,7 +233,7 @@ class AprilStressTests(unittest.TestCase):
             mock.patch("intent.media_intent.handle_media", return_value="Media action ok."),
             mock.patch("intent.capture_and_query", return_value="Vision action ok."),
             mock.patch(
-                "intent.shell.execute",
+                "intent.shell.execute_session_command",
                 return_value={"ok": True, "node": "local", "command": "whoami", "output": "rouna", "returncode": 0},
             ),
         ):
@@ -279,7 +279,7 @@ class AprilStressTests(unittest.TestCase):
 
     def test_shell_timeout_is_projected_as_failure(self):
         with mock.patch(
-            "intent.shell.execute",
+            "intent.shell.execute_session_command",
             return_value={
                 "ok": False,
                 "node": "local",
@@ -295,6 +295,26 @@ class AprilStressTests(unittest.TestCase):
             )
         self.assertFalse(result["ok"])
         self.assertEqual(result["error_kind"], "shell_timeout")
+
+    def test_shell_execute_uses_session_manager_executor(self):
+        with mock.patch(
+            "intent.shell.execute_session_command",
+            return_value={
+                "ok": True,
+                "node": "local",
+                "command": "whoami",
+                "output": "rouna",
+                "returncode": 0,
+            },
+        ) as executor:
+            result = execute_plan(
+                {"intent": "shell", "action": {"mode": "natural", "node": "local", "text": "who am i on local"}},
+                self.config,
+                context={"text": "who am i on local"},
+            )
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["reply"], "rouna")
+        executor.assert_called_once()
 
     def test_main_records_failure_and_discard_events(self):
         with (
@@ -332,6 +352,21 @@ class AprilStressTests(unittest.TestCase):
         )
         snapshot = state_engine.refresh_state_snapshot(config=self.config)
         self.assertIsNone(snapshot["current_state"]["active_request"])
+
+    def test_transcript_logs_include_stt_metadata(self):
+        with (
+            mock.patch("main.begin_interruptible_request", return_value=123),
+            mock.patch("main.transcribe_with_metadata", return_value=("open youtube", {"stt_source": "remote", "stt_model": "whisper-1"})),
+            mock.patch("main.handle_user_text", return_value="Opening https://www.youtube.com."),
+        ):
+            main.on_audio_captured(b"fake audio", 1.25)
+
+        events = debug_log.read_recent_events(limit=10)
+        transcript_events = [event for event in events if event.get("event") == "transcript"]
+        self.assertTrue(transcript_events)
+        event = transcript_events[-1]
+        self.assertEqual(event.get("stt_source"), "remote")
+        self.assertEqual(event.get("stt_model"), "whisper-1")
 
 
 if __name__ == "__main__":

@@ -14,7 +14,7 @@ from intent import execute_plan
 from memory import append_turn
 from observer import collect_runtime_observation
 from state_engine import refresh_state_snapshot
-from stt import transcribe
+from stt import transcribe_with_metadata
 from tts import speak as speak_reply, stop as stop_speaking
 
 
@@ -284,28 +284,28 @@ def on_audio_captured(audio_bytes: bytes, duration: float):
         payload={"request_id": request_id, "duration": duration, "size_kb": round(size_kb, 1)},
         config=config,
     )
-    transcript = transcribe(audio_bytes, config)
+    transcript, stt_meta = transcribe_with_metadata(audio_bytes, config)
     if not transcript.strip():
         print("[main] transcription unavailable")
-        log_event("transcription_unavailable", request_id=request_id)
+        log_event("transcription_unavailable", request_id=request_id, **stt_meta)
         record_state_event(
             "transcript_unavailable",
             source="voice",
             state="failed",
             entity_id=f"request_{request_id}",
-            payload={"request_id": request_id},
+            payload={"request_id": request_id, **stt_meta},
             config=config,
         )
         return "I captured that, but I couldn't transcribe it."
 
     print(f"[main] transcript: {transcript}")
-    log_event("transcript", transcript=transcript, request_id=request_id)
+    log_event("transcript", transcript=transcript, request_id=request_id, **stt_meta)
     record_state_event(
         "transcript_received",
         source="voice",
         state="completed",
         entity_id=f"request_{request_id}",
-        payload={"request_id": request_id, "transcript": transcript},
+        payload={"request_id": request_id, "transcript": transcript, **stt_meta},
         config=config,
     )
     return handle_user_text(transcript, source="voice", request_id=request_id)
