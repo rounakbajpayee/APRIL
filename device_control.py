@@ -51,30 +51,28 @@ def perform(action: dict[str, Any]) -> str:
 def set_volume(level: int) -> str:
     target = max(0, min(100, int(level)))
     try:
-        from ctypes import POINTER, cast
-        from comtypes import CLSCTX_ALL
         from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
     except ImportError:
         return "Volume control dependencies are not installed yet."
 
     devices = AudioUtilities.GetSpeakers()
-    interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
-    volume = cast(interface, POINTER(IAudioEndpointVolume))
+    volume = _get_endpoint_volume(devices, IAudioEndpointVolume)
+    if volume is None:
+        return "Volume control dependencies are not installed yet."
     volume.SetMasterVolumeLevelScalar(target / 100.0, None)
     return f"Volume set to {target} percent."
 
 
 def adjust_volume(delta: int) -> str:
     try:
-        from ctypes import POINTER, cast
-        from comtypes import CLSCTX_ALL
         from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
     except ImportError:
         return "Volume control dependencies are not installed yet."
 
     devices = AudioUtilities.GetSpeakers()
-    interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
-    volume = cast(interface, POINTER(IAudioEndpointVolume))
+    volume = _get_endpoint_volume(devices, IAudioEndpointVolume)
+    if volume is None:
+        return "Volume control dependencies are not installed yet."
     current = round(volume.GetMasterVolumeLevelScalar() * 100)
     target = max(0, min(100, current + int(delta)))
     volume.SetMasterVolumeLevelScalar(target / 100.0, None)
@@ -150,3 +148,27 @@ def _startupinfo():
         startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
         startupinfo.wShowWindow = 0
     return startupinfo
+
+
+def _get_endpoint_volume(devices, endpoint_volume_type):
+    endpoint_volume = getattr(devices, "EndpointVolume", None)
+    if endpoint_volume is not None:
+        return endpoint_volume
+
+    try:
+        from ctypes import POINTER, cast
+        from comtypes import CLSCTX_ALL
+    except ImportError:
+        return None
+
+    activate = getattr(devices, "Activate", None)
+    if not callable(activate):
+        return None
+    try:
+        interface = activate(endpoint_volume_type._iid_, CLSCTX_ALL, None)
+    except Exception:
+        return None
+    try:
+        return cast(interface, POINTER(endpoint_volume_type))
+    except Exception:
+        return None

@@ -13,12 +13,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import types
 import unittest
 from unittest import mock
 
 import brain
 import debug_log
 import event_ledger
+import device_control
 import learning
 import main
 import state_engine
@@ -315,6 +317,19 @@ class AprilStressTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["reply"], "rouna")
         executor.assert_called_once()
+
+    def test_device_volume_prefers_endpoint_volume(self):
+        volume = mock.MagicMock()
+        volume.GetMasterVolumeLevelScalar.return_value = 0.5
+        fake_device = types.SimpleNamespace(EndpointVolume=volume)
+        fake_pycaw = types.SimpleNamespace(
+            AudioUtilities=types.SimpleNamespace(GetSpeakers=lambda: fake_device),
+            IAudioEndpointVolume=types.SimpleNamespace(_iid_="endpoint"),
+        )
+        with mock.patch.dict("sys.modules", {"pycaw": types.SimpleNamespace(pycaw=fake_pycaw), "pycaw.pycaw": fake_pycaw}):
+            reply = device_control.set_volume(70)
+        self.assertEqual(reply, "Volume set to 70 percent.")
+        volume.SetMasterVolumeLevelScalar.assert_called_once_with(0.7, None)
 
     def test_main_records_failure_and_discard_events(self):
         with (
