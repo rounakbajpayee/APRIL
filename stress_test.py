@@ -401,6 +401,12 @@ class AprilStressTests(unittest.TestCase):
         executor.assert_called_once()
         self.assertIn("say", executor.call_args.args[1])
 
+    def test_aprilctl_launcher_quotes_the_main_script(self):
+        contents = (BASE_DIR / "aprilctl.ps1").read_text(encoding="utf-8")
+        self.assertIn("-PassThru", contents)
+        self.assertIn('$startArgs = \'"\' + $MainScript + \'"\'', contents)
+        self.assertIn('-ArgumentList $startArgs', contents)
+
     def test_main_records_failure_and_discard_events(self):
         with (
             mock.patch("main.collect_runtime_observation", return_value={"foreground": {"window_title": "Codex", "app_hint": "Codex"}}),

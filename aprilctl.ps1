@@ -9,7 +9,6 @@ $VenvRoot = Join-Path $RepoRoot ".venv\Scripts"
 $Pythonw = Join-Path $VenvRoot "pythonw.exe"
 $Python = Join-Path $VenvRoot "python.exe"
 $MainScript = Join-Path $RepoRoot "main.py"
-$ProcessNames = @("pythonw.exe", "python.exe")
 
 function Get-AprilProcess {
     $mainPath = [System.IO.Path]::GetFullPath($MainScript)
@@ -36,13 +35,19 @@ function Start-April {
         throw "Could not find a Python launcher in .venv\Scripts"
     }
 
-    Start-Process -FilePath $launcher -WorkingDirectory $RepoRoot -ArgumentList $MainScript -WindowStyle Hidden | Out-Null
-    Start-Sleep -Milliseconds 500
-    $proc = Get-AprilProcess
-    if ($proc) {
-        Write-Host "APRIL started (PID $($proc.ProcessId))."
+    $startArgs = '"' + $MainScript + '"'
+    $proc = Start-Process -FilePath $launcher -WorkingDirectory $RepoRoot -ArgumentList $startArgs -WindowStyle Hidden -PassThru
+    Start-Sleep -Milliseconds 1200
+    if ($proc.HasExited) {
+        Write-Host "APRIL failed to start (exit code $($proc.ExitCode))."
+        return
+    }
+
+    $running = Get-AprilProcess
+    if ($running) {
+        Write-Host "APRIL started (PID $($running.ProcessId))."
     } else {
-        Write-Host "APRIL launch requested, but the process was not detected yet."
+        Write-Host "APRIL started (PID $($proc.Id))."
     }
 }
 
