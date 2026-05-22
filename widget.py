@@ -1,113 +1,93 @@
 """
-widget.py - APRIL floating status widget.
+widget.py - APRIL floating status widget implemented in PyQt6.
 
-Always-on-top, no title bar, bottom-center.
-Canvas-drawn Flow-style dictation pill with a Windows shaped region.
+The public APRILWidget interface is preserved for the rest of the runtime,
+but the internals are rebuilt around Qt signals, custom painting, and a
+frameless translucent window so the widget can look and behave like a small
+Jarvis-style HUD instead of a Tk canvas with Win32 shaping hacks.
 """
 
-import ctypes
-import ctypes.wintypes
+from __future__ import annotations
+
 import json
 import math
 import os
+import sys
 import threading
-import tkinter as tk
-import tkinter.font as tkfont
+from typing import Any
+from datetime import datetime, timezone
+
+from PyQt6.QtCore import (
+    QEasingCurve,
+    QEvent,
+    QPoint,
+    QPointF,
+    QRect,
+    QRectF,
+    QSize,
+    Qt,
+    QTimer,
+    QVariantAnimation,
+    QObject,
+    pyqtSignal,
+)
+from PyQt6.QtGui import (
+    QAction,
+    QColor,
+    QCursor,
+    QFont,
+    QFontMetrics,
+    QLinearGradient,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPolygonF,
+    QRadialGradient,
+    QTextCursor,
+)
+from PyQt6.QtWidgets import (
+    QApplication,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMenu,
+    QPushButton,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
 
 from debug_log import read_recent_events
 from state_engine import get_widget_snapshot_data, get_widget_snapshot_lines
 
 
-gdi32 = ctypes.windll.gdi32
-user32 = ctypes.windll.user32
-user32.SetWindowPos.argtypes = [
-    ctypes.wintypes.HWND,
-    ctypes.wintypes.HWND,
-    ctypes.c_int,
-    ctypes.c_int,
-    ctypes.c_int,
-    ctypes.c_int,
-    ctypes.c_uint,
-]
-user32.SetWindowPos.restype = ctypes.wintypes.BOOL
-try:
-    user32.SetProcessDPIAware()
-except Exception:
-    pass
-
-SPI_GETWORKAREA = 0x0030
-SWP_NOZORDER = 0x0004
-SWP_NOACTIVATE = 0x0010
-SWP_SHOWWINDOW = 0x0040
-
-
-def _set_window_region(hwnd, w, h, radius, scale):
-    """Clip window to a rounded rectangle using SetWindowRgn."""
-    # Tk geometry is already expressed in the window coordinate space that
-    # SetWindowRgn expects. Scaling these values makes the region too large on
-    # high-DPI displays, which exposes the rectangular toplevel background.
-    pw = int(w)
-    ph = int(h)
-    pr = int(radius * 2)
-    rgn = gdi32.CreateRoundRectRgn(0, 0, pw + 1, ph + 1, pr, pr)
-    user32.SetWindowRgn(hwnd, rgn, True)
-
-
-def _get_dpi_scale(root):
-    """Return DPI scale factor: 1.0 at 100%, 1.5 at 150%, etc."""
-    return root.winfo_fpixels("1i") / 96.0
-
-
-def _get_work_area():
-    """Return the usable primary-monitor work area in screen coordinates."""
-    rect = ctypes.wintypes.RECT()
-    if user32.SystemParametersInfoW(SPI_GETWORKAREA, 0, ctypes.byref(rect), 0):
-        return rect.left, rect.top, rect.right, rect.bottom
-    return 0, 0, user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
-
-
 STATES = {
-    "idle": {"color": "#9aa0a6", "label": "APRIL", "pulse": False},
-    "listening": {"color": "#47e38d", "label": "Listening", "pulse": True},
-    "thinking": {"color": "#f7b84b", "label": "Thinking", "pulse": False},
-    "speaking": {"color": "#61a8ff", "label": "Speaking", "pulse": False},
-    "error": {"color": "#ff5a67", "label": "Error", "pulse": False},
+    "idle": {"color": "#9aa0a6", "label": "APRIL"},
+    "listening": {"color": "#47e38d", "label": "Listening"},
+    "thinking": {"color": "#f7b84b", "label": "Thinking"},
+    "speaking": {"color": "#61a8ff", "label": "Speaking"},
+    "error": {"color": "#ff5a67", "label": "Error"},
 }
 
-CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
-HISTORY_PATH = os.path.join(os.path.dirname(__file__), "logs", "ui_history.json")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
+HISTORY_PATH = os.path.join(BASE_DIR, "logs", "ui_history.json")
+TRACE_PATH = os.path.join(BASE_DIR, "logs", "startup_trace.log")
+
 MAX_HISTORY_ITEMS = 40
 RECENT_DEBUG_EVENTS = 10
 RECENT_SNAPSHOT_LINES = 8
 
-BG = "#111214"
-TRANSPARENT = "#010203"
-BORDER = "#2c2f34"
-HIGHLIGHT = "#3a3d44"
-TEXT = "#f4f6f8"
-MUTED = "#8d96a0"
-PANEL_BG = "#111214"
-FIELD_BG = "#17191d"
-FIELD_BORDER = "#30343a"
-USER_BUBBLE = "#1c2530"
-ASSISTANT_BUBBLE = "#181b1f"
-
 PAD_X = 18
 PAD_Y = 11
 RADIUS = 30
-IDLE_MIN_WIDTH = 0
 MIN_WIDTH = 188
 MAX_WIDTH = 420
 MESSAGE_WRAP_WIDTH = 360
 ICON_SIZE = 24
-ICON_GAP = 10
-NODE_GAP = 12
-NODE_PAD_X = 8
-NODE_MAX_WIDTH = 76
-MSG_GAP = 5
+NODE_MAX_WIDTH = 92
 ANCHOR_FROM_BOTTOM = 50
-ANIM_MS = 160
-ANIM_STEP_MS = 16
 AUTO_COLLAPSE_MS = 7000
 MESSAGE_HOLD_MS = 9000
 COLLAPSED_SIZE = 46
@@ -115,354 +95,714 @@ PANEL_WIDTH = 560
 PANEL_HEIGHT = 640
 PANEL_MIN_WIDTH = 500
 PANEL_MIN_HEIGHT = 560
-PANEL_PAD = 16
-PANEL_RADIUS = 26
-PANEL_HEADER_H = 38
-PANEL_INPUT_H = 36
-PANEL_GAP = 10
-CARD_GAP = 8
-CARD_HEIGHT = 58
-CARD_LABEL = "#7d8996"
-CARD_VALUE = "#f4f6f8"
-CARD_BG = "#16191d"
-CARD_BORDER = "#2b3138"
-TIMELINE_BG = "#14171b"
+HEADER_HEIGHT = 86
+PANEL_MARGIN = 14
+PANEL_INSET = 16
+
+BG = QColor("#070a0f")
+BORDER = QColor("#1d2d3b")
+HIGHLIGHT = QColor(255, 255, 255, 20)
+TEXT = QColor("#f4f7fb")
+MUTED = QColor("#8d9cac")
+PANEL_BG = QColor("#09111a")
+PANEL_BORDER = QColor("#235171")
+PANEL_GLOW = QColor("#39b6ff")
+PANEL_AMBER = QColor("#f4b55f")
+CARD_BG = QColor("#0d1620")
+CARD_BORDER = QColor("#224258")
+CARD_LABEL = QColor("#71afd6")
+CARD_VALUE = QColor("#edf5ff")
+TIMELINE_BG = QColor("#081018")
+FIELD_BG = QColor("#0b1520")
+FIELD_BORDER = QColor("#224258")
+INPUT_FOCUS = QColor("#39b6ff")
+WINDOW_BG = "#060a0f"
+HUD_FONT = "Bahnschrift"
+BODY_FONT = "Segoe UI"
+MONO_FONT = "Consolas"
 
 
-class APRILWidget:
-    def __init__(self, config: dict, on_config_change=None, on_text_submit=None):
-        self.config = config
+def trace_startup(message: str) -> None:
+    os.makedirs(os.path.dirname(TRACE_PATH), exist_ok=True)
+    timestamp = datetime.now(timezone.utc).isoformat()
+    with open(TRACE_PATH, "a", encoding="utf-8") as handle:
+        handle.write(f"{timestamp} [widget] {message}\n")
+
+
+class _QtBridge(QObject):
+    state_signal = pyqtSignal(str, str, str)
+    output_signal = pyqtSignal(str, str)
+    config_signal = pyqtSignal(dict)
+    refresh_signal = pyqtSignal()
+    destroy_signal = pyqtSignal()
+    config_refresh_signal = pyqtSignal(dict)
+    panel_submit_signal = pyqtSignal(str)
+    quit_signal = pyqtSignal()
+
+
+def _color(hex_value: str, alpha: int | None = None) -> QColor:
+    color = QColor(hex_value)
+    if alpha is not None:
+        color.setAlpha(alpha)
+    return color
+
+
+class TimelineFeed(QTextEdit):
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setReadOnly(True)
+        self.setFrameStyle(QFrame.Shape.NoFrame)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setStyleSheet(
+            """
+            QTextEdit {
+                background: #081018;
+                color: #f4f7fb;
+                border: 1px solid #24445b;
+                border-radius: 16px;
+                padding: 10px;
+                selection-background-color: #1f4966;
+            }
+            QScrollBar:vertical {
+                background: transparent;
+                width: 10px;
+                margin: 8px 2px 8px 0;
+            }
+            QScrollBar::handle:vertical {
+                background: #28506b;
+                border-radius: 5px;
+                min-height: 28px;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+            """
+        )
+
+    def append_entry(self, role: str, text: str) -> None:
+        clean = " ".join(str(text).strip().split())
+        if not clean:
+            return
+        color = {
+            "user": "#dce8f7",
+            "assistant": "#f4f6f8",
+            "system": "#5a6a7a",
+        }.get(role, "#f4f6f8")
+        label = {
+            "user": "YOU",
+            "assistant": "APRIL",
+            "system": "SYSTEM",
+        }.get(role, "APRIL")
+        cursor = self.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        safe_text = (
+            clean.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        )
+        cursor.insertHtml(
+            f"<div style='margin-top:6px;'>"
+            f"<span style='color:#6e8dad;font-size:10px;font-weight:700;letter-spacing:1px;'>{label}</span><br>"
+            f"<span style='color:{color};font-size:13px;'>{safe_text}</span>"
+            f"</div>"
+        )
+        cursor.insertBlock()
+        self.setTextCursor(cursor)
+        self.ensureCursorVisible()
+
+    def set_entries(self, history: list[tuple[str, str]]) -> None:
+        self.clear()
+        for role, text in history:
+            self.append_entry(role, text)
+
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        painter = QPainter(self.viewport())
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = self.viewport().rect().adjusted(1, 1, -1, -1)
+        if rect.width() <= 0 or rect.height() <= 0:
+            return
+
+        scan_pen = QPen(QColor(57, 182, 255, 16), 1)
+        painter.setPen(scan_pen)
+        for y in range(rect.top() + 6, rect.bottom(), 8):
+            painter.drawLine(rect.left() + 10, y, rect.right() - 10, y)
+
+        accent_pen = QPen(QColor(244, 181, 95, 76), 1.2)
+        painter.setPen(accent_pen)
+        painter.drawLine(rect.left() + 12, rect.top() + 10, rect.left() + 54, rect.top() + 10)
+        painter.drawLine(rect.right() - 54, rect.bottom() - 10, rect.right() - 12, rect.bottom() - 10)
+
+
+class SummaryCard(QWidget):
+    def __init__(self, title: str, parent: QWidget | None = None):
+        super().__init__(parent)
+        self._title = title
+        self._value = "--"
+        self.setMinimumHeight(64)
+
+    def set_value(self, value: str) -> None:
+        self._value = " ".join(str(value or "--").split()) or "--"
+        self.update()
+
+    def paintEvent(self, _event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = self.rect().adjusted(1, 1, -1, -1)
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(rect), 14, 14)
+
+        gradient = QLinearGradient(QPointF(rect.topLeft()), QPointF(rect.bottomLeft()))
+        gradient.setColorAt(0.0, QColor("#0f1a25"))
+        gradient.setColorAt(0.6, QColor("#0c141d"))
+        gradient.setColorAt(1.0, QColor("#081018"))
+        painter.fillPath(path, gradient)
+        painter.setPen(QPen(CARD_BORDER, 1.2))
+        painter.drawPath(path)
+
+        painter.setPen(QPen(QColor(57, 182, 255, 82), 1.4))
+        painter.drawLine(rect.left() + 12, rect.top() + 10, rect.left() + 54, rect.top() + 10)
+        painter.setPen(QPen(QColor(244, 181, 95, 64), 1.0))
+        painter.drawLine(rect.right() - 46, rect.bottom() - 10, rect.right() - 12, rect.bottom() - 10)
+
+        painter.setPen(CARD_LABEL)
+        painter.setFont(QFont(MONO_FONT, 8, QFont.Weight.Bold))
+        painter.drawText(rect.adjusted(12, 10, -12, -12), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop, self._title)
+
+        painter.setPen(CARD_VALUE)
+        painter.setFont(QFont(HUD_FONT, 9, QFont.Weight.DemiBold))
+        value_rect = rect.adjusted(12, 27, -12, -10)
+        painter.drawText(value_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap, self._value)
+
+
+class ResizeGrip(QWidget):
+    def __init__(self, parent: QWidget):
+        super().__init__(parent)
+        self.setFixedSize(20, 20)
+        self._dragging = False
+        self._start_global = QPoint()
+        self._start_size = QSize()
+        self.setCursor(Qt.CursorShape.SizeFDiagCursor)
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
+        self._dragging = True
+        self._start_global = event.globalPosition().toPoint()
+        self._start_size = self.window().size()
+        event.accept()
+
+    def mouseMoveEvent(self, event) -> None:
+        if not self._dragging:
+            return
+        delta = event.globalPosition().toPoint() - self._start_global
+        window = self.window()
+        width = max(PANEL_MIN_WIDTH, self._start_size.width() + delta.x())
+        height = max(PANEL_MIN_HEIGHT, self._start_size.height() + delta.y())
+        if hasattr(window, "set_panel_size"):
+            window.set_panel_size(width, height)
+        event.accept()
+
+    def mouseReleaseEvent(self, event) -> None:
+        self._dragging = False
+        event.accept()
+
+    def paintEvent(self, _event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        pen = QPen(QColor("#65c8ff"), 1.2)
+        painter.setPen(pen)
+        painter.drawLine(7, 18, 18, 7)
+        painter.drawLine(11, 18, 18, 11)
+        painter.drawLine(15, 18, 18, 15)
+        painter.setPen(QPen(QColor(244, 181, 95, 92), 1.0))
+        painter.drawLine(5, 18, 8, 18)
+
+
+class ContextPanel(QWidget):
+    def __init__(self, host: "PillWindow"):
+        super().__init__(host)
+        self.host = host
+        self._build_ui()
+        self._apply_style()
+
+    def _build_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(PANEL_INSET, HEADER_HEIGHT - 4, PANEL_INSET, PANEL_INSET)
+        layout.setSpacing(10)
+
+        header_row = QHBoxLayout()
+        header_row.setContentsMargins(4, 0, 4, 0)
+        header_row.setSpacing(8)
+        self.title_label = QLabel("APRIL", self)
+        self.mode_chip = QLabel("CONTEXT", self)
+        self.close_button = QPushButton("X", self)
+        self.close_button.setFixedSize(30, 30)
+        self.close_button.clicked.connect(self.host._collapse_text_panel)
+        header_row.addWidget(self.title_label, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        header_row.addStretch(1)
+        header_row.addWidget(self.mode_chip, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        header_row.addWidget(self.close_button, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+        card_row_1 = QHBoxLayout()
+        card_row_1.setSpacing(8)
+        card_row_2 = QHBoxLayout()
+        card_row_2.setSpacing(8)
+
+        self.card_status = SummaryCard("STATE", self)
+        self.card_focus = SummaryCard("FOCUS", self)
+        self.card_transcript = SummaryCard("LAST HEARD", self)
+        self.card_reply = SummaryCard("LAST REPLY", self)
+
+        card_row_1.addWidget(self.card_status, 1)
+        card_row_1.addWidget(self.card_focus, 1)
+        card_row_2.addWidget(self.card_transcript, 1)
+        card_row_2.addWidget(self.card_reply, 1)
+
+        self.open_loops_label = QLabel("OPEN LOOPS", self)
+        self.open_loops_text = QLabel("None.", self)
+        self.open_loops_text.setWordWrap(True)
+        self.open_loops_text.setMinimumHeight(72)
+        self.open_loops_text.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        self.open_loops_text.setContentsMargins(10, 8, 10, 8)
+
+        self.timeline_label = QLabel("TIMELINE", self)
+        self.timeline = TimelineFeed(self)
+
+        input_row = QHBoxLayout()
+        input_row.setSpacing(10)
+        self.input_entry = QLineEdit(self)
+        self.input_entry.setPlaceholderText("Type an instruction...")
+        self.input_entry.returnPressed.connect(self._submit_text)
+        self.send_button = QPushButton("Send", self)
+        self.send_button.clicked.connect(self._submit_text)
+        self.send_button.setFixedWidth(74)
+        input_row.addWidget(self.input_entry, 1)
+        input_row.addWidget(self.send_button, 0)
+
+        footer_row = QHBoxLayout()
+        footer_row.setContentsMargins(0, 0, 0, 0)
+        footer_row.setSpacing(0)
+        footer_row.addStretch(1)
+        self.resize_grip = ResizeGrip(self)
+        footer_row.addWidget(self.resize_grip, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom)
+
+        layout.addLayout(header_row)
+        layout.addLayout(card_row_1)
+        layout.addLayout(card_row_2)
+        layout.addWidget(self.open_loops_label)
+        layout.addWidget(self.open_loops_text)
+        layout.addWidget(self.timeline_label)
+        layout.addWidget(self.timeline, 1)
+        layout.addLayout(input_row)
+        layout.addLayout(footer_row)
+
+    def _apply_style(self) -> None:
+        self.setAutoFillBackground(False)
+        self.title_label.setStyleSheet(f"color:#f4f7fb; font: 700 12pt '{HUD_FONT}'; letter-spacing: 1px;")
+        self.mode_chip.setStyleSheet(
+            "background:#0d1c2a;"
+            "border:1px solid #2b5c79;"
+            "border-radius: 11px;"
+            "padding: 4px 10px;"
+            "color:#86d7ff;"
+            f"font: 700 8pt '{MONO_FONT}';"
+        )
+        self.close_button.setStyleSheet(
+            """
+            QPushButton {
+                background: #101821;
+                color: #9ec2dd;
+                border: 1px solid #26445b;
+                border-radius: 15px;
+                font: 700 9pt 'Bahnschrift';
+            }
+            QPushButton:hover {
+                background: #172533;
+                color: #f4f7fb;
+            }
+            """
+        )
+        self.open_loops_label.setStyleSheet(f"color:#71afd6; font: 700 11px '{MONO_FONT}'; letter-spacing: 1px;")
+        self.timeline_label.setStyleSheet(f"color:#71afd6; font: 700 11px '{MONO_FONT}'; letter-spacing: 1px;")
+        self.open_loops_text.setStyleSheet(
+            "background: #09131c;"
+            "border: 1px solid #214359;"
+            "border-radius: 16px;"
+            "color: #f4f7fb;"
+            f"font: 9pt '{BODY_FONT}';"
+        )
+        self.input_entry.setStyleSheet(
+            """
+            QLineEdit {
+                background: #0b1520;
+                color: #f4f7fb;
+                border: 1px solid #224258;
+                border-radius: 16px;
+                padding: 10px 14px;
+                font: 9pt 'Segoe UI';
+            }
+            QLineEdit:focus {
+                border: 1px solid #39b6ff;
+            }
+            """
+        )
+        self.send_button.setStyleSheet(
+            """
+            QPushButton {
+                background: #12304a;
+                color: #f4f7fb;
+                border: 1px solid #2c6b95;
+                border-radius: 16px;
+                padding: 9px 14px;
+                font: 700 9pt 'Bahnschrift';
+            }
+            QPushButton:hover {
+                background: #184264;
+            }
+            QPushButton:disabled {
+                background: #1a2027;
+                color: #65707c;
+                border: 1px solid #27303a;
+            }
+            """
+        )
+        self.input_entry.textChanged.connect(self.sync_send_state)
+        self.sync_send_state()
+
+    def paintEvent(self, _event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = self.rect().adjusted(1, 1, -1, -1)
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(rect), 24, 24)
+
+        gradient = QLinearGradient(QPointF(rect.topLeft()), QPointF(rect.bottomLeft()))
+        gradient.setColorAt(0.0, QColor("#0c1620"))
+        gradient.setColorAt(0.48, QColor("#09111a"))
+        gradient.setColorAt(1.0, QColor("#060c12"))
+        painter.fillPath(path, gradient)
+        painter.setPen(QPen(PANEL_BORDER, 1.3))
+        painter.drawPath(path)
+
+        header_rect = QRect(rect.left() + 10, rect.top() + 10, rect.width() - 20, HEADER_HEIGHT - 18)
+        header_path = QPainterPath()
+        header_path.addRoundedRect(QRectF(header_rect), 18, 18)
+        header_grad = QLinearGradient(QPointF(header_rect.topLeft()), QPointF(header_rect.topRight()))
+        header_grad.setColorAt(0.0, QColor(18, 43, 64, 210))
+        header_grad.setColorAt(0.65, QColor(9, 18, 28, 180))
+        header_grad.setColorAt(1.0, QColor(21, 19, 14, 140))
+        painter.fillPath(header_path, header_grad)
+
+        painter.setPen(QPen(QColor(57, 182, 255, 112), 1.4))
+        painter.drawLine(rect.left() + 18, rect.top() + 18, rect.left() + 74, rect.top() + 18)
+        painter.drawLine(rect.left() + 18, rect.top() + 18, rect.left() + 18, rect.top() + 44)
+        painter.drawLine(rect.right() - 74, rect.bottom() - 18, rect.right() - 18, rect.bottom() - 18)
+        painter.drawLine(rect.right() - 18, rect.bottom() - 44, rect.right() - 18, rect.bottom() - 18)
+
+        painter.setPen(QPen(QColor(244, 181, 95, 74), 1.0))
+        painter.drawLine(rect.right() - 118, rect.top() + 18, rect.right() - 32, rect.top() + 18)
+
+    def sync_send_state(self) -> None:
+        has_text = bool(self.input_entry.text().strip())
+        self.send_button.setEnabled(has_text)
+
+    def _submit_text(self) -> None:
+        self.host.submit_text_from_panel()
+
+
+class PillCanvas(QWidget):
+    def __init__(self, host: "PillWindow"):
+        super().__init__(host)
+        self.host = host
+        self.setAutoFillBackground(False)
+
+    def set_glow_color(self, color: QColor) -> None:
+        self.update()
+
+    def mousePressEvent(self, event) -> None:
+        self.host.handle_canvas_press(event)
+
+    def mouseMoveEvent(self, event) -> None:
+        self.host.handle_canvas_drag(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        self.host.handle_canvas_release(event)
+
+    def paintEvent(self, _event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = self.rect().adjusted(6, 6, -6, -6)
+        if rect.width() <= 0 or rect.height() <= 0:
+            return
+        painter.fillRect(rect, QColor("#0a1118"))
+        painter.setPen(QPen(QColor("#2a5976"), 1.2))
+        painter.drawRect(rect)
+        painter.setPen(QPen(QColor(57, 182, 255, 82), 1.2))
+        painter.drawLine(rect.left() + 14, rect.top() + 12, rect.left() + 56, rect.top() + 12)
+        painter.drawLine(rect.left() + 14, rect.bottom() - 12, rect.left() + 36, rect.bottom() - 12)
+        painter.setPen(QPen(QColor(244, 181, 95, 68), 1.0))
+        painter.drawLine(rect.right() - 48, rect.top() + 12, rect.right() - 14, rect.top() + 12)
+
+        self._draw_status_mark(painter, rect)
+        self._draw_text(painter, rect)
+
+    def _draw_text(self, painter: QPainter, rect: QRect) -> None:
+        host = self.host
+        label_font = QFont(HUD_FONT, 10, QFont.Weight.Bold)
+        msg_font = QFont(BODY_FONT, 9)
+        chip_font = QFont(MONO_FONT, 8, QFont.Weight.Bold)
+        painter.setFont(label_font)
+        painter.setPen(TEXT)
+
+        icon_left = rect.left() + PAD_X
+        icon_center_x = icon_left + (ICON_SIZE // 2)
+        content_left = icon_left + ICON_SIZE + 12
+        content_right = rect.right() - PAD_X
+
+        chip = host.context_chip()
+        chip_width = 0
+        if chip:
+            painter.setFont(chip_font)
+            chip_metrics = QFontMetrics(chip_font)
+            chip_text_width = min(chip_metrics.horizontalAdvance(chip) + 18, NODE_MAX_WIDTH)
+            chip_width = chip_text_width
+            chip_rect = QRect(content_right - chip_width, rect.top() + 12, chip_width, 22)
+            chip_path = QPainterPath()
+            chip_path.addRoundedRect(QRectF(chip_rect), 11, 11)
+            chip_grad = QLinearGradient(QPointF(chip_rect.topLeft()), QPointF(chip_rect.topRight()))
+            chip_grad.setColorAt(0.0, QColor("#0e2233"))
+            chip_grad.setColorAt(1.0, QColor("#122331"))
+            painter.fillPath(chip_path, chip_grad)
+            painter.setPen(QPen(QColor("#2b5c79"), 1))
+            painter.drawPath(chip_path)
+            painter.setPen(QColor("#86d7ff"))
+            painter.drawText(chip_rect, Qt.AlignmentFlag.AlignCenter, chip)
+            painter.setPen(TEXT)
+
+        label_right = content_right - chip_width - (10 if chip_width else 0)
+        label_rect = QRect(content_left, rect.top() + 9, max(0, label_right - content_left), 22)
+        painter.setFont(label_font)
+        painter.drawText(label_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, STATES[host._state]["label"])
+
+        message = host._message.strip()
+        if message:
+            painter.setFont(msg_font)
+            painter.setPen(MUTED)
+            msg_rect = QRect(content_left, rect.top() + 32, max(0, rect.right() - content_left - PAD_X), rect.height() - 38)
+            painter.drawText(msg_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap, message)
+
+    def _draw_status_mark(self, painter: QPainter, rect: QRect) -> None:
+        state = self.host._state
+        color = _color(STATES[state]["color"])
+        pulse = self.host._phase
+        cx = rect.left() + PAD_X + (ICON_SIZE // 2)
+        cy = rect.top() + (rect.height() // 2)
+
+        base_pen = QPen(QColor("#2a3138"), 1.2)
+        painter.setPen(base_pen)
+        painter.setBrush(QColor("#12161a"))
+        painter.drawEllipse(QPointF(cx, cy), 13, 13)
+
+        if state == "idle":
+            arc_pen = QPen(_color(STATES["idle"]["color"], 160), 2.0)
+            arc_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            painter.setPen(arc_pen)
+            radius = 9 + math.sin(pulse * 0.12) * 1.0
+            painter.drawArc(QRectF(cx - radius, cy - radius, radius * 2, radius * 2), 0, 360 * 16)
+            highlight_pen = QPen(_color(STATES["idle"]["color"], 255), 2.2)
+            highlight_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            painter.setPen(highlight_pen)
+            start = int((pulse * 8) % 360)
+            painter.drawArc(QRectF(cx - radius, cy - radius, radius * 2, radius * 2), start * 16, 90 * 16)
+            radial = QRadialGradient(QPointF(cx, cy), 10)
+            radial.setColorAt(0.0, QColor(180, 220, 255, 34))
+            radial.setColorAt(1.0, QColor(0, 0, 0, 0))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(radial)
+            painter.drawEllipse(QPointF(cx, cy), 10, 10)
+            return
+
+        if state == "listening":
+            ripple_radius = 7 + ((pulse % 36) / 36.0) * 8
+            ripple_color = QColor(color)
+            ripple_color.setAlpha(max(18, 130 - int((pulse % 36) / 36.0 * 120)))
+            painter.setPen(QPen(ripple_color, 1.4))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawEllipse(QPointF(cx, cy), ripple_radius, ripple_radius)
+            bar_pen = QPen(color, 3)
+            bar_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            painter.setPen(bar_pen)
+            for idx, phase_shift in enumerate((0.0, 1.2, 2.4)):
+                x = cx - 5 + (idx * 5)
+                height = 5 + int((math.sin((pulse * 0.22) + phase_shift) + 1.0) * 3.4)
+                painter.drawLine(QPointF(x, cy - height / 2), QPointF(x, cy + height / 2))
+            return
+
+        if state == "thinking":
+            orbit_radius = 6.0
+            for idx in range(4):
+                angle = (pulse * 0.095) + (idx * (math.pi / 2.0))
+                dot_color = QColor(color)
+                dot_color.setAlpha(255 if idx == (pulse // 2) % 4 else 92)
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(dot_color)
+                painter.drawEllipse(
+                    QPointF(cx + math.cos(angle) * orbit_radius, cy + math.sin(angle) * orbit_radius),
+                    2.3,
+                    2.3,
+                )
+            return
+
+        if state == "speaking":
+            for cycle, span, alpha in ((20, 10, 115), (30, 14, 84)):
+                factor = (pulse % cycle) / float(cycle)
+                ring_radius = 4 + (factor * span)
+                ring_color = QColor(color)
+                ring_color.setAlpha(max(12, alpha - int(alpha * factor)))
+                painter.setPen(QPen(ring_color, 1.6))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawEllipse(QPointF(cx, cy), ring_radius, ring_radius)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(color)
+            painter.drawEllipse(QPointF(cx, cy), 4.5, 4.5)
+            return
+
+        if state == "error":
+            alpha = 180 if self.host._error_flash else 255
+            danger = QColor(color)
+            danger.setAlpha(alpha)
+            painter.setPen(QPen(danger, 1.4))
+            painter.setBrush(QColor(58, 32, 36, 210))
+            points = [
+                QPointF(cx, cy - 7),
+                QPointF(cx - 7, cy + 6),
+                QPointF(cx + 7, cy + 6),
+            ]
+            painter.drawPolygon(QPolygonF(points))
+            painter.setPen(QPen(danger, 2.0))
+            painter.drawLine(QPointF(cx, cy - 2), QPointF(cx, cy + 2))
+            painter.drawPoint(QPointF(cx, cy + 5))
+
+
+class PillWindow(QWidget):
+    append_output_signal = pyqtSignal(str, str)
+
+    def __init__(self, config: dict[str, Any], on_config_change=None, on_text_submit=None):
+        super().__init__(None)
+        trace_startup("PillWindow.__init__ entered")
+        self.config = dict(config)
         self.on_config_change = on_config_change
         self.on_text_submit = on_text_submit
 
         self._state = "idle"
         self._node = ""
         self._message = ""
-        self._pulse_job = None
-        self._anim_job = None
-        self._collapse_job = None
-        self._message_clear_job = None
-        self._hover_sync_job = None
-        self._dot_id = None
-        self._wave_ids = []
-        self._wave_phase = 0
-        self._motion_phase = 0
+        self._phase = 0
         self._collapsed = False
-        self._display_w = 0
-        self._display_h = 0
-        self._anchor_x = None
-        self._anchor_y = None
-        self._anchor_bottom_y = None
-        self._hwnd = None
-        self._scale = 1.0
         self._panel_visible = False
         self._panel_w = PANEL_WIDTH
         self._panel_h = PANEL_HEIGHT
-        self._history = []
+        self._history: list[tuple[str, str]] = []
         self._hovering = False
-        self._resizing = False
-        self._resize_start_x = 0
-        self._resize_start_y = 0
-        self._resize_start_w = 0
-        self._resize_start_h = 0
+        self._dragging = False
+        self._drag_offset = QPoint()
+        self._anchor_x: float | None = None
+        self._anchor_y: float | None = None
+        self._anchor_bottom_y: float | None = None
+        self._target_width = MIN_WIDTH
+        self._target_height = 62
+        self._error_flash = False
+
+        self._animation = QVariantAnimation(self)
+        self._animation.setDuration(220)
+        self._animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._animation.valueChanged.connect(self._apply_animation_value)
+        self._animation.finished.connect(self._sync_child_layout)
+
+        self._motion_timer = QTimer(self)
+        self._motion_timer.timeout.connect(self._tick_motion)
+        self._motion_timer.start(33)
+
+        self._collapse_timer = QTimer(self)
+        self._collapse_timer.setSingleShot(True)
+        self._collapse_timer.timeout.connect(self._collapse_idle)
+
+        self._message_timer = QTimer(self)
+        self._message_timer.setSingleShot(True)
+        self._message_timer.timeout.connect(self._clear_idle_message)
+
+        self._hover_timer = QTimer(self)
+        self._hover_timer.setSingleShot(True)
+        self._hover_timer.timeout.connect(self._sync_hover_exit)
+
+        self._keep_top_timer = QTimer(self)
+        self._keep_top_timer.timeout.connect(self.raise_)
+        self._keep_top_timer.start(2000)
+        self._allow_close = False
+        trace_startup("PillWindow timers configured")
 
         self._build_window()
-        self._build_fonts()
-        self._build_canvas()
-        self._build_text_panel()
+        trace_startup("PillWindow._build_window complete")
         self._load_persisted_history()
-        self._redraw()
-        self.root.deiconify()
-        self._schedule_collapse()
-        if self._text_panel_active():
+        trace_startup("PillWindow history loaded")
+        self._redraw(animated=False)
+        trace_startup("PillWindow initial redraw complete")
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        trace_startup("PillWindow shown")
+        if self.text_panel_active():
             self._seed_debug_console_if_needed()
-            self.root.after(120, self._focus_text_input)
+            QTimer.singleShot(120, self.panel.input_entry.setFocus)
+            trace_startup("PillWindow text panel active at startup")
+        else:
+            self._schedule_collapse()
+            trace_startup("PillWindow collapse scheduled at startup")
 
-    def _build_window(self):
-        self.root = tk.Tk()
-        self.root.withdraw()
-        self.root.title("APRIL")
-        self.root.overrideredirect(True)
-        self.root.attributes("-topmost", True)
-        self.root.attributes("-transparentcolor", TRANSPARENT)
-        self.root.resizable(True, True)
-        self.root.config(bg=TRANSPARENT, padx=0, pady=0)
-        self.root.after(2000, self._keep_on_top)
-        self.root.bind("<Enter>", self._on_hover_enter)
-        self.root.bind("<Leave>", self._on_hover_leave)
+    def _build_window(self) -> None:
+        self.setWindowFlags(Qt.WindowType.Window)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+        self.setMouseTracking(True)
+        self.setStyleSheet(f"background:{WINDOW_BG};")
+        self.setWindowTitle("APRIL")
 
-    def _build_fonts(self):
-        self.font_label = tkfont.Font(family="Segoe UI", size=10, weight="bold")
-        self.font_node = tkfont.Font(family="Segoe UI", size=8, weight="bold")
-        self.font_msg = tkfont.Font(family="Segoe UI", size=9)
-        self.font_panel = tkfont.Font(family="Segoe UI", size=9)
-        self.font_panel_bold = tkfont.Font(family="Segoe UI", size=9, weight="bold")
+        self.canvas = PillCanvas(self)
+        self.panel = ContextPanel(self)
+        self.panel.hide()
+        self.append_output_signal.connect(self._append_output)
 
-    def _build_canvas(self):
-        self.root.update_idletasks()
-        hwnd = self.root.winfo_id()
-        self._hwnd = user32.GetParent(hwnd) or hwnd
-        self._scale = _get_dpi_scale(self.root)
+        for widget in self._hover_widgets():
+            widget.installEventFilter(self)
 
-        self.canvas = tk.Canvas(
-            self.root,
-            bg=TRANSPARENT,
-            highlightthickness=0,
-            width=1,
-            height=1,
-            borderwidth=0,
+    def _hover_widgets(self) -> list[QObject]:
+        widgets: list[QObject] = [self, self.canvas, self.panel, self.panel.input_entry, self.panel.send_button, self.panel.timeline, self.panel.resize_grip]
+        widgets.extend(
+            [
+                self.panel.title_label,
+                self.panel.mode_chip,
+                self.panel.close_button,
+                self.panel.card_status,
+                self.panel.card_focus,
+                self.panel.card_transcript,
+                self.panel.card_reply,
+                self.panel.open_loops_label,
+                self.panel.open_loops_text,
+                self.panel.timeline_label,
+            ]
         )
-        self.canvas.place(x=0, y=0)
-        self.canvas.bind("<Button-3>", self._show_context_menu)
-        self.canvas.bind("<Button-1>", self._drag_start)
-        self.canvas.bind("<B1-Motion>", self._drag_motion)
-        self.canvas.bind("<Enter>", self._on_hover_enter)
-        self.canvas.bind("<Leave>", self._on_hover_leave)
+        return widgets
 
-    def _build_text_panel(self):
-        self.panel_frame = tk.Frame(self.root, bg=PANEL_BG, bd=0, highlightthickness=0)
+    def sizeHint(self) -> QSize:
+        return QSize(self._target_width, self._target_height)
 
-        self.panel_title = tk.Label(
-            self.panel_frame,
-            text="APRIL",
-            bg=PANEL_BG,
-            fg=TEXT,
-            font=self.font_label,
-            anchor="w",
-        )
-        self.panel_mode = tk.Label(
-            self.panel_frame,
-            text="CONTEXT",
-            bg="#1d242b",
-            fg="#8fb4d8",
-            font=self.font_node,
-            padx=8,
-            pady=2,
-        )
-        self.panel_close = tk.Button(
-            self.panel_frame,
-            text="x",
-            command=self._collapse_text_panel,
-            bg=PANEL_BG,
-            fg=MUTED,
-            activebackground="#1a1d21",
-            activeforeground=TEXT,
-            relief="flat",
-            bd=0,
-            highlightthickness=0,
-            font=self.font_panel_bold,
-            cursor="hand2",
-        )
+    def eventFilter(self, _obj, event) -> bool:
+        if event.type() == QEvent.Type.Enter:
+            self._on_hover_enter()
+        elif event.type() == QEvent.Type.Leave:
+            self._on_hover_leave()
+        return False
 
-        self.summary_frame = tk.Frame(self.panel_frame, bg=PANEL_BG, bd=0, highlightthickness=0)
-        self.card_status = self._make_summary_card("STATE")
-        self.card_focus = self._make_summary_card("FOCUS")
-        self.card_transcript = self._make_summary_card("LAST HEARD")
-        self.card_reply = self._make_summary_card("LAST REPLY")
-
-        self.open_loops_label = tk.Label(
-            self.panel_frame,
-            text="OPEN LOOPS",
-            bg=PANEL_BG,
-            fg=CARD_LABEL,
-            font=self.font_node,
-            anchor="w",
-        )
-        self.open_loops_text = tk.Label(
-            self.panel_frame,
-            text="None.",
-            bg=TIMELINE_BG,
-            fg=TEXT,
-            justify="left",
-            anchor="nw",
-            font=self.font_panel,
-            padx=10,
-            pady=8,
-            bd=0,
-            highlightthickness=1,
-            highlightbackground=FIELD_BORDER,
-            wraplength=420,
-        )
-
-        self.timeline_label = tk.Label(
-            self.panel_frame,
-            text="TIMELINE",
-            bg=PANEL_BG,
-            fg=CARD_LABEL,
-            font=self.font_node,
-            anchor="w",
-        )
-
-        self.output_text = tk.Text(
-            self.panel_frame,
-            bg=TIMELINE_BG,
-            fg=TEXT,
-            insertbackground=TEXT,
-            selectbackground="#2d4158",
-            selectforeground=TEXT,
-            relief="flat",
-            bd=0,
-            highlightthickness=1,
-            highlightbackground=FIELD_BORDER,
-            highlightcolor=FIELD_BORDER,
-            font=self.font_panel,
-            wrap="word",
-            padx=10,
-            pady=8,
-            height=7,
-            state="disabled",
-            cursor="arrow",
-        )
-        self.output_scroll = tk.Scrollbar(self.panel_frame, orient="vertical", command=self.output_text.yview)
-        self.output_text.configure(yscrollcommand=self.output_scroll.set)
-        self.output_text.tag_configure("user", foreground="#dce8f7", spacing1=6, spacing3=2)
-        self.output_text.tag_configure("assistant", foreground="#f4f6f8", spacing1=6, spacing3=2)
-        self.output_text.tag_configure("system", foreground=MUTED, spacing1=6, spacing3=2)
-
-        self.input_var = tk.StringVar()
-        self.input_entry = tk.Entry(
-            self.panel_frame,
-            textvariable=self.input_var,
-            bg=FIELD_BG,
-            fg=TEXT,
-            insertbackground=TEXT,
-            selectbackground="#2d4158",
-            selectforeground=TEXT,
-            relief="flat",
-            bd=0,
-            highlightthickness=1,
-            highlightbackground=FIELD_BORDER,
-            highlightcolor="#4d6f92",
-            font=self.font_panel,
-        )
-        self.send_button = tk.Button(
-            self.panel_frame,
-            text="Send",
-            command=self._submit_text,
-            bg="#223348",
-            fg=TEXT,
-            activebackground="#2c4564",
-            activeforeground=TEXT,
-            relief="flat",
-            bd=0,
-            highlightthickness=0,
-            font=self.font_panel_bold,
-            cursor="hand2",
-        )
-        self.resize_grip = tk.Label(
-            self.panel_frame,
-            text="↘",
-            bg=PANEL_BG,
-            fg=MUTED,
-            font=self.font_node,
-            cursor="size_nw_se",
-        )
-
-        self.input_entry.bind("<Return>", self._submit_text)
-        self.input_entry.bind("<Escape>", lambda _event: self._collapse_text_panel())
-        self.input_var.trace_add("write", lambda *_args: self._sync_send_state())
-        self._sync_send_state()
-        for widget in (
-            self.panel_frame,
-            self.panel_title,
-            self.panel_mode,
-            self.panel_close,
-            self.summary_frame,
-            self.open_loops_label,
-            self.open_loops_text,
-            self.timeline_label,
-            self.output_text,
-            self.output_scroll,
-            self.input_entry,
-            self.send_button,
-            self.resize_grip,
-        ):
-            widget.bind("<Enter>", self._on_hover_enter)
-            widget.bind("<Leave>", self._on_hover_leave)
-        self.resize_grip.bind("<Button-1>", self._resize_start)
-        self.resize_grip.bind("<B1-Motion>", self._resize_motion)
-        self.resize_grip.bind("<ButtonRelease-1>", self._resize_end)
-
-    def _make_summary_card(self, label_text):
-        card = tk.Frame(
-            self.summary_frame,
-            bg=CARD_BG,
-            bd=0,
-            highlightthickness=1,
-            highlightbackground=CARD_BORDER,
-        )
-        label = tk.Label(
-            card,
-            text=label_text,
-            bg=CARD_BG,
-            fg=CARD_LABEL,
-            font=self.font_node,
-            anchor="w",
-        )
-        value = tk.Label(
-            card,
-            text="--",
-            bg=CARD_BG,
-            fg=CARD_VALUE,
-            font=self.font_panel_bold,
-            anchor="w",
-            justify="left",
-            wraplength=140,
-        )
-        label.place(x=10, y=8, width=120, height=14)
-        value.place(x=10, y=24, width=142, height=24)
-        for widget in (card, label, value):
-            widget.bind("<Enter>", self._on_hover_enter)
-            widget.bind("<Leave>", self._on_hover_leave)
-        return {"frame": card, "label": label, "value": value}
-
-    def _ellipsize(self, text, font, max_width):
-        if not text or font.measure(text) <= max_width:
-            return text
-        ellipsis = "..."
-        available = max_width - font.measure(ellipsis)
-        trimmed = text
-        while trimmed and font.measure(trimmed) > available:
-            trimmed = trimmed[:-1]
-        return trimmed.rstrip() + ellipsis
-
-    def _wrap_text(self, text, font, max_width):
-        clean = " ".join(str(text).strip().split())
-        if not clean:
-            return "", 0, 0
-
-        lines = []
-        current = ""
-        for word in clean.split(" "):
-            candidate = word if not current else f"{current} {word}"
-            if font.measure(candidate) <= max_width:
-                current = candidate
-                continue
-            if current:
-                lines.append(current)
-                current = ""
-            if font.measure(word) <= max_width:
-                current = word
-                continue
-
-            chunk = ""
-            for char in word:
-                candidate = chunk + char
-                if chunk and font.measure(candidate) > max_width:
-                    lines.append(chunk)
-                    chunk = char
-                else:
-                    chunk = candidate
-            current = chunk
-
-        if current:
-            lines.append(current)
-
-        wrapped = "\n".join(lines)
-        width = max((font.measure(line) for line in lines), default=0)
-        return wrapped, width, len(lines)
-
-    def _context_chip(self):
+    def context_chip(self) -> str:
         if self._node:
             return self._node.upper()
         if self._state == "idle":
@@ -473,10 +813,150 @@ class APRILWidget:
             return "VOICE OFF"
         return ""
 
-    def _text_panel_active(self):
+    def text_panel_active(self) -> bool:
         return (not self.config.get("voice", True)) or self._panel_visible
 
-    def _load_persisted_history(self):
+    def set_panel_size(self, width: int, height: int) -> None:
+        self._panel_w = max(PANEL_MIN_WIDTH, width)
+        self._panel_h = max(PANEL_MIN_HEIGHT, height)
+        if self.text_panel_active():
+            self._redraw(animated=False)
+
+    def handle_canvas_press(self, event) -> None:
+        if event.button() == Qt.MouseButton.RightButton:
+            self._show_context_menu(event.globalPosition().toPoint())
+            return
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
+        if self._collapsed:
+            self._collapsed = False
+            self._open_text_panel()
+            return
+        self._dragging = True
+        self._drag_offset = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+
+    def handle_canvas_drag(self, event) -> None:
+        if not self._dragging:
+            return
+        new_pos = event.globalPosition().toPoint() - self._drag_offset
+        self.move(new_pos)
+        self._persist_anchor_from_geometry()
+
+    def handle_canvas_release(self, _event) -> None:
+        self._dragging = False
+
+    def submit_text_from_panel(self) -> None:
+        text = self.panel.input_entry.text().strip()
+        if not text:
+            return
+        self.panel.input_entry.clear()
+        self._append_output("user", text)
+        self._append_output("system", "Queued")
+        if not self.on_text_submit:
+            self._append_output("assistant", "Text input is ready. The assistant pipeline can plug in here.")
+            return
+
+        def run_submit() -> None:
+            try:
+                response = self.on_text_submit(text)
+            except Exception as exc:
+                self.append_output_signal.emit("system", f"text submit failed: {exc}")
+                return
+            if response:
+                self.append_output_signal.emit("assistant", response)
+
+        threading.Thread(target=run_submit, daemon=True).start()
+
+    def submit_text_programmatically(self, text: str) -> None:
+        self.panel.input_entry.setText(text)
+        self.submit_text_from_panel()
+
+    def apply_state(self, state: str, message: str = "", node: str = "") -> None:
+        self._collapse_timer.stop()
+        self._message_timer.stop()
+        self._collapsed = False
+        self._state = state if state in STATES else "idle"
+        self._message = " ".join(str(message or "").split())
+        self._node = " ".join(str(node or "").split())
+        self._error_flash = self._state == "error"
+        if self._state in {"listening", "thinking", "speaking"}:
+            self.canvas.set_glow_color(_color(STATES[self._state]["color"]))
+        elif self._state == "error":
+            self.canvas.set_glow_color(_color(STATES["error"]["color"]))
+        else:
+            self.canvas.set_glow_color(_color(STATES["idle"]["color"]))
+        self._redraw(animated=True)
+        if self.text_panel_active():
+            QTimer.singleShot(120, self.panel.input_entry.setFocus)
+        elif self._state == "idle":
+            if self._message:
+                self._schedule_message_clear()
+            else:
+                self._schedule_collapse()
+
+    def apply_output(self, role: str, text: str) -> None:
+        self._append_output(role, text)
+
+    def apply_config(self, config: dict[str, Any]) -> None:
+        self.config.clear()
+        self.config.update(config)
+        self._collapsed = False
+        self._collapse_timer.stop()
+        self._message_timer.stop()
+        self._redraw(animated=False)
+        if self.text_panel_active():
+            QTimer.singleShot(120, self.panel.input_entry.setFocus)
+        elif self._state == "idle":
+            if self._message:
+                self._schedule_message_clear()
+            else:
+                self._schedule_collapse()
+
+    def refresh_context_view(self) -> None:
+        self._history.clear()
+        self._refresh_summary_cards()
+        self._seed_debug_console_if_needed()
+
+    def request_destroy(self) -> None:
+        self._allow_close = True
+        self.close()
+
+    def closeEvent(self, event) -> None:
+        if not self._allow_close:
+            event.ignore()
+            return
+        self._keep_top_timer.stop()
+        self._motion_timer.stop()
+        self._collapse_timer.stop()
+        self._message_timer.stop()
+        self._hover_timer.stop()
+        event.accept()
+
+    def paintEvent(self, _event) -> None:
+        if not self.text_panel_active():
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = self.rect().adjusted(PANEL_MARGIN // 2, PANEL_MARGIN // 2, -(PANEL_MARGIN // 2), -(PANEL_MARGIN // 2))
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(rect), 28, 28)
+        outer_grad = QLinearGradient(QPointF(rect.topLeft()), QPointF(rect.bottomLeft()))
+        outer_grad.setColorAt(0.0, QColor("#08111a"))
+        outer_grad.setColorAt(0.55, QColor("#060b10"))
+        outer_grad.setColorAt(1.0, QColor("#04070b"))
+        painter.fillPath(path, outer_grad)
+        painter.setPen(QPen(QColor("#274c67"), 1.4))
+        painter.drawPath(path)
+
+        painter.setPen(QPen(QColor(57, 182, 255, 92), 1.4))
+        painter.drawLine(rect.left() + 18, rect.top() + 18, rect.left() + 82, rect.top() + 18)
+        painter.drawLine(rect.left() + 18, rect.top() + 18, rect.left() + 18, rect.top() + 48)
+        painter.drawLine(rect.right() - 82, rect.bottom() - 18, rect.right() - 18, rect.bottom() - 18)
+        painter.drawLine(rect.right() - 18, rect.bottom() - 48, rect.right() - 18, rect.bottom() - 18)
+        painter.setPen(QPen(QColor(244, 181, 95, 70), 1.0))
+        painter.drawLine(rect.right() - 128, rect.top() + 18, rect.right() - 40, rect.top() + 18)
+
+    def _load_persisted_history(self) -> None:
         try:
             with open(HISTORY_PATH, encoding="utf-8") as handle:
                 items = json.load(handle)
@@ -493,44 +973,48 @@ class APRILWidget:
                 continue
             self._history.append((role, " ".join(text.split())))
         if self._history:
-            self._render_history()
+            self.panel.timeline.set_entries(self._history)
 
-    def _save_history(self):
+    def _save_history(self) -> None:
         os.makedirs(os.path.dirname(HISTORY_PATH), exist_ok=True)
         data = [{"role": role, "text": text} for role, text in self._history[-MAX_HISTORY_ITEMS:]]
         with open(HISTORY_PATH, "w", encoding="utf-8") as handle:
             json.dump(data, handle, indent=2)
 
-    def _seed_debug_console_if_needed(self):
+    def _append_output(self, role: str, text: str) -> None:
+        clean = " ".join(str(text).strip().split())
+        if not clean:
+            return
+        self._history.append((role, clean))
+        self._history = self._history[-MAX_HISTORY_ITEMS:]
+        self._refresh_summary_cards()
+        self.panel.timeline.set_entries(self._history)
+        try:
+            self._save_history()
+        except Exception:
+            pass
+
+    def _seed_debug_console_if_needed(self) -> None:
         if self._history:
+            self.panel.timeline.set_entries(self._history)
             return
         self._refresh_summary_cards()
         snapshot_lines = get_widget_snapshot_lines(limit=RECENT_SNAPSHOT_LINES)
         for role, text in snapshot_lines:
             self._history.append((role, text))
         debug_events = read_recent_events(limit=RECENT_DEBUG_EVENTS)
-        if not debug_events:
-            if self._history:
-                self._history = self._history[-MAX_HISTORY_ITEMS:]
-                self._render_history()
-                try:
-                    self._save_history()
-                except Exception:
-                    pass
-            return
         for event in debug_events:
             summary = self._format_debug_event(event)
             if summary:
                 self._history.append(("system", summary))
-        if self._history:
-            self._history = self._history[-MAX_HISTORY_ITEMS:]
-            self._render_history()
-            try:
-                self._save_history()
-            except Exception:
-                pass
+        self._history = self._history[-MAX_HISTORY_ITEMS:]
+        self.panel.timeline.set_entries(self._history)
+        try:
+            self._save_history()
+        except Exception:
+            pass
 
-    def _format_debug_event(self, event):
+    def _format_debug_event(self, event: dict[str, Any]) -> str:
         event_type = str(event.get("event", "") or "").strip()
         if not event_type:
             return ""
@@ -547,602 +1031,134 @@ class APRILWidget:
             return f"Request started from {source}."
         if event_type == "action_result":
             reply = str(event.get("reply", "") or "").strip()
-            if reply:
-                return f"Action: {reply}"
+            return f"Action: {reply}" if reply else ""
         return ""
 
-    def refresh_context_view(self):
-        def apply_refresh():
-            self._history.clear()
-            self._refresh_summary_cards()
-            self._seed_debug_console_if_needed()
-
-        self.root.after(0, apply_refresh)
-
-    def _refresh_summary_cards(self):
+    def _refresh_summary_cards(self) -> None:
         snapshot = get_widget_snapshot_data(limit=6)
         if not snapshot:
-            self._set_card_value(self.card_status, "--")
-            self._set_card_value(self.card_focus, "--")
-            self._set_card_value(self.card_transcript, "--")
-            self._set_card_value(self.card_reply, "--")
-            self.open_loops_text.config(text="None.")
+            self.panel.card_status.set_value("--")
+            self.panel.card_focus.set_value("--")
+            self.panel.card_transcript.set_value("--")
+            self.panel.card_reply.set_value("--")
+            self.panel.open_loops_text.setText("None.")
             return
-
-        self._set_card_value(self.card_status, str(snapshot.get("status", "--") or "--").upper())
+        self.panel.card_status.set_value(str(snapshot.get("status", "--") or "--").upper())
         focus = str(snapshot.get("focus", "") or snapshot.get("active_window", "") or "").strip() or "No active app"
         transcript = str(snapshot.get("last_transcript", "") or "").strip() or "Nothing heard yet"
         reply = str(snapshot.get("last_reply", "") or "").strip() or "No reply yet"
-        self._set_card_value(self.card_focus, focus)
-        self._set_card_value(self.card_transcript, transcript)
-        self._set_card_value(self.card_reply, reply)
-
+        self.panel.card_focus.set_value(focus)
+        self.panel.card_transcript.set_value(transcript)
+        self.panel.card_reply.set_value(reply)
         open_loops = snapshot.get("open_loops", [])
         if isinstance(open_loops, list) and open_loops:
-            self.open_loops_text.config(text="\n".join(f"- {item}" for item in open_loops))
+            self.panel.open_loops_text.setText("\n".join(f"- {item}" for item in open_loops))
         else:
-            self.open_loops_text.config(text="None.")
+            self.panel.open_loops_text.setText("None.")
 
-    def _set_card_value(self, card, text):
-        card["value"].config(text=self._ellipsize(str(text or ""), self.font_panel_bold, 142))
-
-    def _measure_layout(self):
-        if self._text_panel_active():
-            return {
-                "state": STATES.get(self._state, STATES["idle"]),
-                "label": "APRIL",
-                "node": "TEXT",
-                "message": "",
-                "w": self._panel_w,
-                "h": self._panel_h,
-                "radius": PANEL_RADIUS,
-                "collapsed": False,
-                "panel": True,
-                "anchor": "bottom",
+    def _show_context_menu(self, global_pos: QPoint) -> None:
+        if self._collapsed:
+            self._collapsed = False
+            self._redraw(animated=False)
+        menu = QMenu(self)
+        menu.setStyleSheet(
+            """
+            QMenu {
+                background: #14181d;
+                border: 1px solid #27303a;
+                border-radius: 10px;
+                padding: 6px;
+                color: #dbe4ee;
+                font: 9pt 'Segoe UI';
             }
-
-        state = STATES.get(self._state, STATES["idle"])
-        label = state["label"]
-        node = self._ellipsize(self._context_chip(), self.font_node, NODE_MAX_WIDTH)
-        message, msg_row_w, msg_lines = self._wrap_text(self._message, self.font_msg, MESSAGE_WRAP_WIDTH)
-
-        if self._collapsed and self._state == "idle" and not message:
-            return {
-                "state": state,
-                "label": "",
-                "node": "",
-                "message": "",
-                "w": COLLAPSED_SIZE,
-                "h": COLLAPSED_SIZE,
-                "radius": COLLAPSED_SIZE // 2,
-                "collapsed": True,
-                "panel": False,
-                "anchor": "center",
+            QMenu::item {
+                padding: 8px 18px;
+                border-radius: 8px;
             }
-
-        lh = self.font_label.metrics("linespace")
-        mh = self.font_msg.metrics("linespace")
-        lw = self.font_label.measure(label)
-        nw = self.font_node.measure(node) if node else 0
-        node_w = nw + NODE_PAD_X * 2 if node else 0
-
-        label_row_w = ICON_SIZE + ICON_GAP + lw + (NODE_GAP + node_w if node else 0)
-        content_w = max(label_row_w, msg_row_w)
-        content_h = lh + (MSG_GAP + (mh * msg_lines) if message else 0)
-
-        h = content_h + PAD_Y * 2
-        radius = min(RADIUS, h // 2)
-        min_width = IDLE_MIN_WIDTH if self._state == "idle" else MIN_WIDTH
-        w = min(MAX_WIDTH, max(min_width, content_w + PAD_X * 2, radius * 2 + 1))
-        if w % 2:
-            w = w + 1 if w < MAX_WIDTH else w - 1
-
-        return {
-            "state": state,
-            "label": label,
-            "node": node,
-            "message": message,
-            "w": w,
-            "h": h,
-            "radius": radius,
-            "lh": lh,
-            "mh": mh,
-            "lw": lw,
-            "nw": nw,
-            "node_w": node_w,
-            "label_row_w": label_row_w,
-            "msg_lines": msg_lines,
-            "collapsed": False,
-            "panel": False,
-            "anchor": "center",
-        }
-
-    def _redraw(self, animate=True):
-        layout = self._measure_layout()
-        if animate and self._display_w and self._display_h:
-            self._animate_to(layout)
-            return
-        self._render_layout(layout, layout["w"], layout["h"])
-
-    def _render_layout(self, layout, w, h):
-        radius = min(layout["radius"], h // 2)
-        self.canvas.delete("all")
-        self._wave_ids = []
-        self._dot_id = None
-        self.canvas.config(width=w, height=h)
-        self._set_position(w, h, radius, layout.get("anchor", "center"))
-        self._draw_pill(w, h, radius)
-
-        if layout.get("panel"):
-            self._place_text_panel(w, h)
-            self._display_w = w
-            self._display_h = h
-            return
-
-        self._hide_text_panel()
-
-        if layout["collapsed"]:
-            self._draw_status_mark(w / 2, h / 2, layout["state"]["color"])
-            self._display_w = w
-            self._display_h = h
-            return
-
-        label_cy = PAD_Y + layout["lh"] // 2
-        msg_top = PAD_Y + layout["lh"] + MSG_GAP
-        row_x = (w - layout["label_row_w"]) / 2
-        icon_cx = row_x + ICON_SIZE / 2
-        text_x = row_x + ICON_SIZE + ICON_GAP
-
-        self._draw_status_mark(icon_cx, label_cy, layout["state"]["color"])
-        self.canvas.create_text(
-            text_x,
-            label_cy,
-            text=layout["label"],
-            font=self.font_label,
-            fill=TEXT,
-            anchor="w",
+            QMenu::item:selected {
+                background: #203247;
+            }
+            """
         )
+        voice_label = "Voice: ON" if self.config.get("voice", True) else "Voice: OFF"
+        home_label = "At Home: YES" if self.config.get("at_home", True) else "At Home: NO"
+        term_label = "Terminal: SHOW" if self.config.get("terminal_visible", True) else "Terminal: HIDE"
 
-        if layout["node"]:
-            node_h = 18
-            node_x1 = text_x + layout["lw"] + NODE_GAP
-            node_x2 = node_x1 + layout["node_w"]
-            self._draw_round_rect(
-                node_x1,
-                label_cy - node_h // 2,
-                node_x2,
-                label_cy + node_h // 2,
-                9,
-                fill="#1d242b",
-                outline="#2b3641",
-            )
-            self.canvas.create_text(
-                node_x1 + NODE_PAD_X,
-                label_cy,
-                text=layout["node"],
-                font=self.font_node,
-                fill="#8fb4d8",
-                anchor="w",
-            )
+        voice_action = QAction(voice_label, self)
+        voice_action.triggered.connect(self._toggle_voice)
+        home_action = QAction(home_label, self)
+        home_action.triggered.connect(self._toggle_home)
+        term_action = QAction(term_label, self)
+        term_action.triggered.connect(self._toggle_terminal)
 
-        if layout["message"]:
-            self.canvas.create_text(
-                w / 2,
-                msg_top,
-                text=layout["message"],
-                font=self.font_msg,
-                fill=MUTED,
-                anchor="n",
-                justify="center",
-                width=MESSAGE_WRAP_WIDTH,
-            )
-        self._display_w = w
-        self._display_h = h
+        menu.addAction(voice_action)
+        menu.addAction(home_action)
+        menu.addAction(term_action)
+        if self.text_panel_active():
+            refresh_action = QAction("Refresh Context", self)
+            refresh_action.triggered.connect(self.refresh_context_view)
+            menu.addAction(refresh_action)
+        menu.addSeparator()
+        quit_action = QAction("Quit APRIL", self)
+        quit_action.triggered.connect(self.request_destroy)
+        menu.addAction(quit_action)
+        menu.exec(global_pos)
 
-    def _animate_to(self, layout):
-        if self._anim_job:
-            self.root.after_cancel(self._anim_job)
-            self._anim_job = None
+    def _toggle_voice(self) -> None:
+        self._set_config("voice", not self.config.get("voice", True))
 
-        start_w = self._display_w
-        start_h = self._display_h
-        target_w = layout["w"]
-        target_h = layout["h"]
-        steps = max(1, ANIM_MS // ANIM_STEP_MS)
+    def _toggle_home(self) -> None:
+        self._set_config("at_home", not self.config.get("at_home", True))
 
-        def ease(t):
-            return 1 - pow(1 - t, 3)
+    def _toggle_terminal(self) -> None:
+        self._set_config("terminal_visible", not self.config.get("terminal_visible", True))
 
-        def frame(step=1):
-            t = ease(step / steps)
-            w = round(start_w + (target_w - start_w) * t)
-            h = round(start_h + (target_h - start_h) * t)
-            self._render_layout(layout, w, h)
-            if step < steps:
-                self._anim_job = self.root.after(ANIM_STEP_MS, lambda: frame(step + 1))
-            else:
-                self._anim_job = None
-                self._render_layout(layout, target_w, target_h)
+    def _set_config(self, key: str, value: Any) -> None:
+        self.config[key] = value
+        self._write_config()
+        if key == "voice":
+            self.apply_config(self.config)
+        if self.on_config_change:
+            self.on_config_change(key, value)
 
-        frame()
-
-    def _place_text_panel(self, w, h):
-        frame_w = max(1, w - 2)
-        frame_h = max(1, h - 2)
-        inner_x = PANEL_PAD
-        inner_w = max(160, frame_w - PANEL_PAD * 2)
-        header_y = PANEL_PAD
-        output_y = header_y + PANEL_HEADER_H
-        input_y = frame_h - PANEL_PAD - PANEL_INPUT_H
-        button_w = 66
-        entry_w = inner_w - button_w - PANEL_GAP
-
-        self.panel_frame.place(x=1, y=1, width=frame_w, height=frame_h)
-        self.panel_title.place(x=inner_x, y=header_y + 5, width=120, height=24)
-        self.panel_mode.place(x=frame_w - PANEL_PAD - 58, y=header_y + 7, width=58, height=22)
-        self.panel_close.place(x=frame_w - PANEL_PAD - 94, y=header_y + 4, width=28, height=28)
-        self.summary_frame.place(x=inner_x, y=output_y, width=inner_w, height=(CARD_HEIGHT * 2) + CARD_GAP)
-        card_w = max(120, (inner_w - CARD_GAP) // 2)
-        self.card_status["frame"].place(x=0, y=0, width=card_w, height=CARD_HEIGHT)
-        self.card_focus["frame"].place(x=card_w + CARD_GAP, y=0, width=inner_w - card_w - CARD_GAP, height=CARD_HEIGHT)
-        self.card_transcript["frame"].place(x=0, y=CARD_HEIGHT + CARD_GAP, width=card_w, height=CARD_HEIGHT)
-        self.card_reply["frame"].place(x=card_w + CARD_GAP, y=CARD_HEIGHT + CARD_GAP, width=inner_w - card_w - CARD_GAP, height=CARD_HEIGHT)
-        loops_y = output_y + (CARD_HEIGHT * 2) + CARD_GAP + PANEL_GAP
-        self.open_loops_label.place(x=inner_x, y=loops_y, width=120, height=16)
-        self.open_loops_text.place(x=inner_x, y=loops_y + 18, width=inner_w, height=72)
-        timeline_y = loops_y + 18 + 72 + PANEL_GAP
-        self.timeline_label.place(x=inner_x, y=timeline_y, width=120, height=16)
-        self.output_text.place(x=inner_x, y=timeline_y + 18, width=inner_w - 2, height=max(220, input_y - (timeline_y + 18) - PANEL_GAP))
-        self.input_entry.place(x=inner_x, y=input_y, width=entry_w, height=PANEL_INPUT_H)
-        self.send_button.place(x=inner_x + entry_w + PANEL_GAP, y=input_y, width=button_w, height=PANEL_INPUT_H)
-        self.output_scroll.place(x=inner_x + inner_w - 14, y=timeline_y + 18, width=12, height=max(220, input_y - (timeline_y + 18) - PANEL_GAP))
-        self.resize_grip.place(x=frame_w - 20, y=frame_h - 20, width=16, height=16)
-        self._refresh_summary_cards()
-
-    def _hide_text_panel(self):
-        if self.panel_frame.winfo_ismapped():
-            self.panel_frame.place_forget()
-
-    def _focus_text_input(self):
-        if self._text_panel_active():
-            self.input_entry.focus_set()
-
-    def _sync_send_state(self):
-        has_text = bool(self.input_var.get().strip())
-        self.send_button.config(
-            state="normal" if has_text else "disabled",
-            bg="#223348" if has_text else "#1b2027",
-            fg=TEXT if has_text else "#59616b",
-        )
-
-    def _append_output(self, role, text):
-        clean = " ".join(str(text).strip().split())
-        if not clean:
-            return
-        self._history.append((role, clean))
-        self._history = self._history[-MAX_HISTORY_ITEMS:]
-        self._refresh_summary_cards()
-        self._render_history()
+    def _write_config(self) -> None:
         try:
-            self._save_history()
-        except Exception:
-            pass
+            with open(CONFIG_PATH, "w", encoding="utf-8") as handle:
+                json.dump(self.config, handle, indent=2)
+        except Exception as exc:
+            self.apply_state("error", f"config write failed: {exc}")
 
-    def _render_history(self):
-        self.output_text.config(state="normal")
-        self.output_text.delete("1.0", "end")
-        for item_role, item_text in self._history:
-            label = "You" if item_role == "user" else "APRIL" if item_role == "assistant" else "System"
-            tag = item_role if item_role in {"user", "assistant"} else "system"
-            self.output_text.insert("end", f"{label}: {item_text}\n", tag)
-        self.output_text.config(state="disabled")
-        self.output_text.see("end")
+    def _open_text_panel(self) -> None:
+        self._panel_visible = True
+        self._redraw(animated=True)
+        QTimer.singleShot(120, self.panel.input_entry.setFocus)
 
-    def add_text_output(self, text, role="assistant"):
-        self.root.after(0, lambda: self._append_output(role, text))
-
-    def _submit_text(self, event=None):
-        text = self.input_var.get().strip()
-        if not text:
-            return "break"
-        self.input_var.set("")
-        self._append_output("user", text)
-        self._append_output("system", "Queued")
-
-        if self.on_text_submit:
-            try:
-                response = self.on_text_submit(text)
-            except Exception as exc:
-                self._append_output("system", f"text submit failed: {exc}")
-            else:
-                if response:
-                    self._append_output("assistant", response)
-        else:
-            self._append_output("assistant", "Text input is ready. The assistant pipeline can plug in here.")
-        return "break"
-
-    def _collapse_text_panel(self):
+    def _collapse_text_panel(self) -> None:
         self._panel_visible = False
         if not self.config.get("voice", True):
             self._set_config("voice", True)
         else:
-            self._redraw()
+            self._redraw(animated=True)
 
-    def _open_text_panel(self):
-        self._panel_visible = True
-        self._redraw()
+    def _tick_motion(self) -> None:
+        self._phase += 1
+        if self._error_flash and self._phase % 8 == 0:
+            self._error_flash = False
+        self.canvas.update()
+        if self.text_panel_active():
+            self.panel.update()
 
-    def _draw_round_rect(self, x1, y1, x2, y2, radius, fill, outline):
-        r = radius
-        c = self.canvas
-        c.create_arc(x1, y1, x1 + r * 2, y1 + r * 2, start=90, extent=90, fill=fill, outline=outline)
-        c.create_arc(x2 - r * 2, y1, x2, y1 + r * 2, start=0, extent=90, fill=fill, outline=outline)
-        c.create_arc(x1, y2 - r * 2, x1 + r * 2, y2, start=180, extent=90, fill=fill, outline=outline)
-        c.create_arc(x2 - r * 2, y2 - r * 2, x2, y2, start=270, extent=90, fill=fill, outline=outline)
-        c.create_rectangle(x1 + r, y1, x2 - r, y2, fill=fill, outline=fill)
-        c.create_rectangle(x1, y1 + r, x2, y2 - r, fill=fill, outline=fill)
-
-    def _draw_pill(self, w, h, radius):
-        self._draw_round_rect(0, 0, w, h, radius, fill=BG, outline=BG)
-        self.canvas.create_arc(1, 1, radius * 2, radius * 2, start=90, extent=90, outline=BORDER, style="arc", width=1)
-        self.canvas.create_arc(w - radius * 2, 1, w - 1, radius * 2, start=0, extent=90, outline=BORDER, style="arc", width=1)
-        self.canvas.create_arc(1, h - radius * 2, radius * 2, h - 1, start=180, extent=90, outline=BORDER, style="arc", width=1)
-        self.canvas.create_arc(w - radius * 2, h - radius * 2, w - 1, h - 1, start=270, extent=90, outline=BORDER, style="arc", width=1)
-        self.canvas.create_line(radius, 1, w - radius, 1, fill=HIGHLIGHT, width=1)
-        self.canvas.create_line(radius, h - 1, w - radius, h - 1, fill=BORDER, width=1)
-
-    def _draw_status_mark(self, cx, cy, color):
-        r = ICON_SIZE // 2
-        self.canvas.create_oval(cx - r, cy - r, cx + r, cy + r, fill="#1c2024", outline="#30353b")
-        if self._state == "listening":
-            heights = [
-                8 + int(4 * math.sin((self._motion_phase + i) * 0.9))
-                for i in range(3)
-            ]
-            for i, height in enumerate(heights):
-                x = cx - 5 + i * 5
-                self.canvas.create_line(
-                    x,
-                    cy - height // 2,
-                    x,
-                    cy + height // 2,
-                    fill=color,
-                    width=3,
-                    capstyle=tk.ROUND,
-                )
-        elif self._state == "thinking":
-            for i in range(4):
-                angle = (self._motion_phase * 0.55) + (i * math.pi / 2)
-                alpha_color = color if i == self._motion_phase % 4 else "#6c5329"
-                x = cx + math.cos(angle) * 5
-                y = cy + math.sin(angle) * 5
-                self.canvas.create_oval(x - 2, y - 2, x + 2, y + 2, fill=alpha_color, outline=alpha_color)
-        elif self._state == "speaking":
-            pulse = 1 + (self._motion_phase % 5)
-            self.canvas.create_oval(
-                cx - 4 - pulse,
-                cy - 4 - pulse,
-                cx + 4 + pulse,
-                cy + 4 + pulse,
-                outline="#234c7c",
-                width=1,
-            )
-            self._dot_id = self.canvas.create_oval(cx - 5, cy - 5, cx + 5, cy + 5, fill=color, outline=color)
-        elif self._state == "error":
-            self.canvas.create_polygon(
-                cx,
-                cy - 7,
-                cx - 7,
-                cy + 6,
-                cx + 7,
-                cy + 6,
-                fill="#3a2024",
-                outline=color,
-            )
-            self.canvas.create_line(cx, cy - 2, cx, cy + 2, fill=color, width=2, capstyle=tk.ROUND)
-            self.canvas.create_oval(cx - 1, cy + 4, cx + 1, cy + 6, fill=color, outline=color)
-        else:
-            self._dot_id = self.canvas.create_oval(
-                cx - 5,
-                cy - 5,
-                cx + 5,
-                cy + 5,
-                fill=color,
-                outline=color,
-            )
-
-    def _set_position(self, w, h, radius, anchor="center"):
-        if self._anchor_x is None or self._anchor_y is None:
-            persisted_x = self.config.get("widget_anchor_x")
-            persisted_y = self.config.get("widget_anchor_y")
-            persisted_bottom_y = self.config.get("widget_anchor_bottom_y")
-            if persisted_x is not None and persisted_y is not None:
-                self._anchor_x = float(persisted_x)
-                self._anchor_y = float(persisted_y)
-                if persisted_bottom_y is not None:
-                    self._anchor_bottom_y = float(persisted_bottom_y)
-            if self._anchor_x is None or self._anchor_y is None:
-                left, top, right, bottom = _get_work_area()
-                self._anchor_x = (left + right) / 2
-                self._anchor_y = bottom - ANCHOR_FROM_BOTTOM
-                self._anchor_bottom_y = self._anchor_y + 25
-        x = round(self._anchor_x - w / 2)
-        if anchor == "bottom":
-            bottom_y = self._anchor_bottom_y if self._anchor_bottom_y is not None else self._anchor_y + 25
-            y = round(bottom_y - h)
-        else:
-            y = round(self._anchor_y - h / 2)
-        self.root.geometry(f"{w}x{h}+{x}+{y}")
-        user32.SetWindowPos(
-            self._hwnd,
-            None,
-            x,
-            y,
-            w,
-            h,
-            SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW,
-        )
-        self.canvas.place(x=0, y=0, width=w, height=h)
-        _set_window_region(self._hwnd, w, h, radius, self._scale)
-
-    def set_state(self, state: str, message: str = "", node: str = ""):
-        if self._collapse_job:
-            self.root.after_cancel(self._collapse_job)
-            self._collapse_job = None
-        if self._message_clear_job:
-            self.root.after_cancel(self._message_clear_job)
-            self._message_clear_job = None
-        self._collapsed = False
-        self._state = state
-        self._message = message
-        self._node = node
-        self.root.after(0, self._on_state_change)
-
-    def _on_state_change(self):
-        if self._pulse_job:
-            self.root.after_cancel(self._pulse_job)
-            self._pulse_job = None
-        self._motion_phase = 0
-        self._redraw()
-        if self._state in {"listening", "thinking", "speaking"}:
-            self._pulse()
-        elif self._state == "idle" and not self._text_panel_active():
-            if self._message:
-                self._schedule_message_clear()
-            else:
-                self._schedule_collapse()
-
-    def update_from_config(self):
-        self.root.after(0, self._on_config_refresh)
-
-    def _on_config_refresh(self):
-        if self._collapse_job:
-            self.root.after_cancel(self._collapse_job)
-            self._collapse_job = None
-        if self._message_clear_job:
-            self.root.after_cancel(self._message_clear_job)
-            self._message_clear_job = None
-        self._collapsed = False
-        self._redraw()
-        if self._text_panel_active():
-            self.root.after(120, self._focus_text_input)
-        elif self._state == "idle":
-            if self._message:
-                self._schedule_message_clear()
-            else:
-                self._schedule_collapse()
-
-    def run(self):
-        self.root.mainloop()
-
-    def destroy(self):
-        self.root.after(0, self.root.destroy)
-
-    def _schedule_collapse(self):
-        if self._text_panel_active() or self._hovering:
-            return
-        if self._collapse_job:
-            self.root.after_cancel(self._collapse_job)
-        self._collapse_job = self.root.after(AUTO_COLLAPSE_MS, self._collapse_idle)
-
-    def _schedule_message_clear(self):
-        if self._text_panel_active() or self._hovering:
-            return
-        if self._message_clear_job:
-            self.root.after_cancel(self._message_clear_job)
-        self._message_clear_job = self.root.after(MESSAGE_HOLD_MS, self._clear_idle_message)
-
-    def _collapse_idle(self):
-        self._collapse_job = None
-        if self._state == "idle" and not self._message:
-            self._collapsed = True
-            self._redraw()
-
-    def _clear_idle_message(self):
-        self._message_clear_job = None
-        if self._hovering or self._state != "idle" or not self._message:
-            return
-        self._message = ""
-        self._redraw()
-        self._schedule_collapse()
-
-    def _pulse(self):
-        if self._state not in {"listening", "thinking", "speaking"}:
-            return
-        self._motion_phase += 1
-        self._redraw(animate=False)
-        self._pulse_job = self.root.after(180, self._pulse)
-
-    def _keep_on_top(self):
-        self.root.attributes("-topmost", True)
-        self.root.after(2000, self._keep_on_top)
-
-    def _drag_start(self, event):
-        if self._collapsed:
-            self._collapsed = False
-            self._open_text_panel()
-            return
-        self._drag_x = event.x_root - self.root.winfo_x()
-        self._drag_y = event.y_root - self.root.winfo_y()
-
-    def _drag_motion(self, event):
-        x = event.x_root - self._drag_x
-        y = event.y_root - self._drag_y
-        self.root.geometry(f"+{x}+{y}")
-        self._anchor_x = x + self.root.winfo_width() / 2
-        self._anchor_y = y + self.root.winfo_height() / 2
-        self._anchor_bottom_y = y + self.root.winfo_height()
-        self.config["widget_anchor_x"] = round(self._anchor_x, 1)
-        self.config["widget_anchor_y"] = round(self._anchor_y, 1)
-        self.config["widget_anchor_bottom_y"] = round(self._anchor_bottom_y, 1)
-        self._write_config()
-
-    def _resize_start(self, event):
-        self._resizing = True
-        self._resize_start_x = event.x_root
-        self._resize_start_y = event.y_root
-        self._resize_start_w = self._panel_w
-        self._resize_start_h = self._panel_h
-
-    def _resize_motion(self, event):
-        if not self._resizing:
-            return
-        delta_w = event.x_root - self._resize_start_x
-        delta_h = event.y_root - self._resize_start_y
-        self._panel_w = max(PANEL_MIN_WIDTH, self._resize_start_w + delta_w)
-        self._panel_h = max(PANEL_MIN_HEIGHT, self._resize_start_h + delta_h)
-        self._redraw(animate=False)
-
-    def _resize_end(self, _event=None):
-        self._resizing = False
-
-    def _on_hover_enter(self, _event=None):
+    def _on_hover_enter(self) -> None:
         self._hovering = True
-        if self._hover_sync_job:
-            self.root.after_cancel(self._hover_sync_job)
-            self._hover_sync_job = None
-        if self._collapse_job:
-            self.root.after_cancel(self._collapse_job)
-            self._collapse_job = None
-        if self._message_clear_job:
-            self.root.after_cancel(self._message_clear_job)
-            self._message_clear_job = None
+        self._hover_timer.stop()
+        self._collapse_timer.stop()
+        self._message_timer.stop()
 
-    def _on_hover_leave(self, _event=None):
-        if self._hover_sync_job:
-            self.root.after_cancel(self._hover_sync_job)
-        self._hover_sync_job = self.root.after(40, self._sync_hover_exit)
+    def _on_hover_leave(self) -> None:
+        self._hover_timer.start(40)
 
-    def _sync_hover_exit(self):
-        self._hover_sync_job = None
-        pointer_x = self.root.winfo_pointerx()
-        pointer_y = self.root.winfo_pointery()
-        root_x = self.root.winfo_rootx()
-        root_y = self.root.winfo_rooty()
-        root_w = self.root.winfo_width()
-        root_h = self.root.winfo_height()
-        inside = root_x <= pointer_x <= root_x + root_w and root_y <= pointer_y <= root_y + root_h
-        if inside:
+    def _sync_hover_exit(self) -> None:
+        if self.frameGeometry().contains(QCursor.pos()):
             return
         self._hovering = False
         if self._state == "idle":
@@ -1151,66 +1167,211 @@ class APRILWidget:
             else:
                 self._schedule_collapse()
 
-    def _show_context_menu(self, event):
+    def _schedule_collapse(self) -> None:
+        if self.text_panel_active() or self._hovering:
+            return
+        self._collapse_timer.start(AUTO_COLLAPSE_MS)
+
+    def _schedule_message_clear(self) -> None:
+        if self.text_panel_active() or self._hovering:
+            return
+        self._message_timer.start(MESSAGE_HOLD_MS)
+
+    def _collapse_idle(self) -> None:
+        if self._state == "idle" and not self._message:
+            self._collapsed = True
+            self._redraw(animated=True)
+
+    def _clear_idle_message(self) -> None:
+        if self._hovering or self._state != "idle" or not self._message:
+            return
+        self._message = ""
+        self._redraw(animated=True)
+        self._schedule_collapse()
+
+    def _desired_pill_size(self) -> tuple[int, int]:
         if self._collapsed:
-            self._collapsed = False
-            self._redraw()
-        menu = tk.Menu(
-            self.root,
-            tearoff=0,
-            bg="#222222",
-            fg="#cccccc",
-            activebackground="#333333",
-            activeforeground="#ffffff",
-            font=("Segoe UI", 9),
-            bd=0,
+            return COLLAPSED_SIZE, COLLAPSED_SIZE
+
+        label_font = QFont("Segoe UI", 10, QFont.Weight.Bold)
+        msg_font = QFont("Segoe UI", 9)
+        label_metrics = QFontMetrics(label_font)
+        msg_metrics = QFontMetrics(msg_font)
+        chip = self.context_chip()
+        chip_width = 0
+        if chip:
+            chip_width = min(QFontMetrics(QFont("Segoe UI", 8, QFont.Weight.Bold)).horizontalAdvance(chip) + 18, NODE_MAX_WIDTH)
+
+        message = self._message.strip()
+        if not message:
+            width = max(MIN_WIDTH, PAD_X + ICON_SIZE + 12 + label_metrics.horizontalAdvance(STATES[self._state]["label"]) + chip_width + PAD_X + 14)
+            return min(MAX_WIDTH, width), 60
+
+        wrapped = msg_metrics.boundingRect(QRect(0, 0, MESSAGE_WRAP_WIDTH, 400), int(Qt.TextFlag.TextWordWrap), message)
+        content_width = max(label_metrics.horizontalAdvance(STATES[self._state]["label"]) + chip_width + 12, wrapped.width())
+        width = min(MAX_WIDTH, max(MIN_WIDTH, PAD_X + ICON_SIZE + 12 + content_width + PAD_X + 10))
+        height = max(62, 28 + wrapped.height() + 20)
+        return width, height
+
+    def _target_geometry(self) -> QRect:
+        if self.text_panel_active():
+            width = self._panel_w
+            height = self._panel_h
+            anchor_mode = "bottom"
+        else:
+            width, height = self._desired_pill_size()
+            anchor_mode = "bottom"
+        self._target_width = width
+        self._target_height = height
+        x, y = self._resolve_anchor_position(width, height, anchor_mode)
+        return QRect(x, y, width, height)
+
+    def _resolve_anchor_position(self, width: int, height: int, anchor_mode: str) -> tuple[int, int]:
+        screen = QApplication.primaryScreen()
+        if screen is not None:
+            work_area = screen.availableGeometry()
+        else:
+            work_area = QRect(0, 0, 1920, 1080)
+
+        if self._anchor_x is None or self._anchor_bottom_y is None:
+            self._anchor_x = float(self.config.get("widget_anchor_x")) if self.config.get("widget_anchor_x") is not None else None
+            self._anchor_y = float(self.config.get("widget_anchor_y")) if self.config.get("widget_anchor_y") is not None else None
+            self._anchor_bottom_y = float(self.config.get("widget_anchor_bottom_y")) if self.config.get("widget_anchor_bottom_y") is not None else None
+
+        if self._anchor_x is None or self._anchor_bottom_y is None:
+            self._anchor_x = work_area.center().x()
+            self._anchor_bottom_y = work_area.bottom() - ANCHOR_FROM_BOTTOM
+            self._anchor_y = self._anchor_bottom_y - (height / 2.0)
+
+        if (
+            self._anchor_x < work_area.left() - width
+            or self._anchor_x > work_area.right() + width
+            or self._anchor_bottom_y < work_area.top()
+            or self._anchor_bottom_y > work_area.bottom() + height
+        ):
+            self._anchor_x = work_area.center().x()
+            self._anchor_bottom_y = work_area.bottom() - ANCHOR_FROM_BOTTOM
+            self._anchor_y = self._anchor_bottom_y - (height / 2.0)
+
+        x = int(round(self._anchor_x - (width / 2.0)))
+        if anchor_mode == "bottom":
+            y = int(round(self._anchor_bottom_y - height))
+        else:
+            center_y = self._anchor_y if self._anchor_y is not None else self._anchor_bottom_y - (height / 2.0)
+            y = int(round(center_y - (height / 2.0)))
+
+        x = max(work_area.left(), min(work_area.right() - width, x))
+        y = max(work_area.top(), min(work_area.bottom() - height, y))
+        return x, y
+
+    def _persist_anchor_from_geometry(self) -> None:
+        frame = self.frameGeometry()
+        self._anchor_x = frame.x() + (frame.width() / 2.0)
+        self._anchor_y = frame.y() + (frame.height() / 2.0)
+        self._anchor_bottom_y = frame.y() + frame.height()
+        self.config["widget_anchor_x"] = round(self._anchor_x, 1)
+        self.config["widget_anchor_y"] = round(self._anchor_y, 1)
+        self.config["widget_anchor_bottom_y"] = round(self._anchor_bottom_y, 1)
+        try:
+            self._write_config()
+        except Exception:
+            pass
+
+    def _redraw(self, animated: bool) -> None:
+        target = self._target_geometry()
+        trace_startup(
+            f"_redraw animated={animated} panel={self.text_panel_active()} collapsed={self._collapsed} "
+            f"target=({target.x()},{target.y()},{target.width()},{target.height()})"
         )
+        if self.text_panel_active():
+            self.panel.show()
+            self._refresh_summary_cards()
+            if not self._history:
+                self._seed_debug_console_if_needed()
+        else:
+            self.panel.hide()
+        self.canvas.raise_()
+        if animated:
+            self._animation.stop()
+            self._animation.setStartValue(self.geometry())
+            self._animation.setEndValue(target)
+            self._animation.start()
+        else:
+            self.setGeometry(target)
+            self._sync_child_layout()
+        self.update()
+        self.canvas.update()
 
-        voice_label = "Voice: ON" if self.config.get("voice", True) else "Voice: OFF"
-        menu.add_command(label=voice_label, command=self._toggle_voice)
+    def _apply_animation_value(self, value: Any) -> None:
+        rect = value if isinstance(value, QRect) else QRect(value)
+        self.setGeometry(rect)
+        self._sync_child_layout()
 
-        home_label = "At Home: YES" if self.config.get("at_home", True) else "At Home: NO"
-        menu.add_command(label=home_label, command=self._toggle_home)
+    def _sync_child_layout(self) -> None:
+        width = self.width()
+        height = self.height()
+        if self.text_panel_active():
+            self.canvas.setGeometry(0, 0, width, HEADER_HEIGHT)
+            self.panel.setGeometry(PANEL_MARGIN, PANEL_MARGIN, width - (PANEL_MARGIN * 2), height - (PANEL_MARGIN * 2))
+        else:
+            self.canvas.setGeometry(0, 0, width, height)
 
-        term_label = "Terminal: SHOW" if self.config.get("terminal_visible", True) else "Terminal: HIDE"
-        menu.add_command(label=term_label, command=self._toggle_terminal)
-        if self._text_panel_active():
-            menu.add_command(label="Refresh Context", command=self.refresh_context_view)
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._sync_child_layout()
 
-        menu.add_separator()
-        menu.add_command(label="Quit APRIL", command=self._quit)
 
-        try:
-            menu.tk_popup(event.x_root, event.y_root)
-        finally:
-            menu.grab_release()
+class APRILWidget:
+    def __init__(self, config: dict, on_config_change=None, on_text_submit=None):
+        trace_startup("APRILWidget.__init__ entered")
+        self.config = dict(config)
+        self.on_config_change = on_config_change
+        self.on_text_submit = on_text_submit
+        self.app = QApplication.instance() or QApplication(sys.argv[:1])
+        trace_startup("QApplication acquired")
+        self.app.setQuitOnLastWindowClosed(False)
+        self.app.aboutToQuit.connect(lambda: trace_startup("QApplication aboutToQuit emitted"))
+        self._heartbeat_timer = QTimer()
+        self._heartbeat_timer.setInterval(5000)
+        self._heartbeat_timer.timeout.connect(lambda: trace_startup("QApplication heartbeat"))
+        self._heartbeat_timer.start()
+        self.bridge = _QtBridge()
+        trace_startup("_QtBridge created")
+        self.window = PillWindow(self.config, on_config_change=on_config_change, on_text_submit=on_text_submit)
+        trace_startup("PillWindow created")
 
-    def _toggle_voice(self):
-        self._set_config("voice", not self.config.get("voice", True))
+        self.bridge.state_signal.connect(self.window.apply_state)
+        self.bridge.output_signal.connect(lambda text, role: self.window.apply_output(role, text))
+        self.bridge.config_signal.connect(self.window.apply_config)
+        self.bridge.refresh_signal.connect(self.window.refresh_context_view)
+        self.bridge.destroy_signal.connect(self.window.request_destroy)
+        self.bridge.config_refresh_signal.connect(self.window.apply_config)
+        self.bridge.panel_submit_signal.connect(self.window.submit_text_programmatically)
+        self.bridge.quit_signal.connect(self.app.quit)
+        trace_startup("APRILWidget signals connected")
 
-    def _toggle_home(self):
-        self._set_config("at_home", not self.config.get("at_home", True))
+    def set_state(self, state: str, message: str = "", node: str = ""):
+        self.bridge.state_signal.emit(state, message, node)
 
-    def _toggle_terminal(self):
-        self._set_config("terminal_visible", not self.config.get("terminal_visible", True))
+    def add_text_output(self, text: str, role: str = "assistant"):
+        self.bridge.output_signal.emit(text, role)
 
-    def _set_config(self, key, value):
-        self.config[key] = value
-        self._write_config()
-        if key == "voice":
-            self.update_from_config()
-        if self.on_config_change:
-            self.on_config_change(key, value)
+    def update_from_config(self):
+        self.bridge.config_signal.emit(dict(self.window.config))
 
-    def _write_config(self):
-        try:
-            with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-                json.dump(self.config, f, indent=2)
-        except Exception as e:
-            self.set_state("error", f"config write failed: {e}")
+    def refresh_context_view(self):
+        self.bridge.refresh_signal.emit()
 
-    def _quit(self):
-        self.root.destroy()
+    def schedule_config_refresh(self, config: dict):
+        self.bridge.config_refresh_signal.emit(dict(config))
+
+    def run(self):
+        self.window.show()
+        self.app.exec()
+
+    def destroy(self):
+        self.bridge.destroy_signal.emit()
+        self.bridge.quit_signal.emit()
 
 
 if __name__ == "__main__":
@@ -1229,33 +1390,31 @@ if __name__ == "__main__":
         print(f"[text] {text}")
         return f"Received: {text}"
 
-    w = APRILWidget(dummy_config, on_config_change=on_change, on_text_submit=on_submit)
+    widget = APRILWidget(dummy_config, on_config_change=on_change, on_text_submit=on_submit)
 
-    def demo():
+    def demo() -> None:
         time.sleep(1)
-        w.set_state("listening", node="mac")
-        time.sleep(3)
-        w.set_state("thinking", node="mac")
+        widget.set_state("listening", node="mac")
         time.sleep(2)
-        w.set_state("speaking", node="mac", message="opening spotify")
+        widget.set_state("thinking", node="mac")
         time.sleep(2)
-        w.set_state("error", message="ollama unreachable")
+        widget.set_state("speaking", "opening the orbital diagnostics feed", node="mac")
         time.sleep(2)
-        w.set_state("idle")
+        widget.set_state("error", "ollama unreachable")
         time.sleep(2)
-
+        widget.set_state("idle")
+        time.sleep(2)
         dummy_config["voice"] = False
-        w.update_from_config()
-        time.sleep(0.5)
-        w.add_text_output("Voice is off. Text replies will appear here.", role="assistant")
-        time.sleep(1)
-        w.root.after(0, lambda: w.input_var.set("summarize today's plan"))
-        time.sleep(0.5)
-        w.root.after(0, w._submit_text)
+        widget.schedule_config_refresh(dummy_config)
+        time.sleep(0.8)
+        widget.add_text_output("Voice is off. Text replies will appear here.", role="assistant")
+        time.sleep(0.8)
+        widget.bridge.panel_submit_signal.emit("summarize today's plan")
         time.sleep(3)
         dummy_config["voice"] = True
-        w.update_from_config()
-        w.set_state("idle")
+        widget.schedule_config_refresh(dummy_config)
+        widget.set_state("idle")
+        QTimer.singleShot(1200, widget.destroy)
 
     threading.Thread(target=demo, daemon=True).start()
-    w.run()
+    widget.run()

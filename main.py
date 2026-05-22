@@ -3,9 +3,11 @@ main.py - APRIL entry point.
 """
 
 import ctypes
+from datetime import datetime, timezone
 import json
 import os
 import threading
+import traceback
 
 from brain import process as plan_with_brain
 from debug_log import log_event
@@ -22,11 +24,19 @@ from tts import speak as speak_reply, stop as stop_speaking
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 DEFAULT_PATH = os.path.join(BASE_DIR, "config_defaults.json")
+TRACE_PATH = os.path.join(BASE_DIR, "logs", "startup_trace.log")
 _request_lock = threading.Lock()
 _latest_request_id = 0
 _widget_ref = None
 _single_instance_handle = None
 _SINGLE_INSTANCE_NAME = "Local\\APRILDesktopSingleton"
+
+
+def trace_startup(message: str) -> None:
+    os.makedirs(os.path.dirname(TRACE_PATH), exist_ok=True)
+    timestamp = datetime.now(timezone.utc).isoformat()
+    with open(TRACE_PATH, "a", encoding="utf-8") as handle:
+        handle.write(f"{timestamp} [main] {message}\n")
 
 
 def load_config() -> dict:
@@ -349,21 +359,18 @@ def acquire_single_instance() -> bool:
 
 
 def _schedule_widget_config_refresh(config: dict) -> None:
-    if _widget_ref is None or not hasattr(_widget_ref, "root"):
+    if _widget_ref is None or not hasattr(_widget_ref, "schedule_config_refresh"):
         return
-
-    def apply_update():
-        _widget_ref.config.clear()
-        _widget_ref.config.update(config)
-        _widget_ref.update_from_config()
-
-    _widget_ref.root.after(0, apply_update)
+    _widget_ref.schedule_config_refresh(config)
 
 
 def main():
     global _widget_ref
+    trace_startup("main() entered")
     config = load_config()
+    trace_startup(f"config loaded voice={config.get('voice')} at_home={config.get('at_home')}")
     if not acquire_single_instance():
+        trace_startup("duplicate instance detected; exiting")
         print("[main] another APRIL instance is already running - exiting duplicate launch")
         return
     print(f"[main] config loaded - at_home={config.get('at_home')}, voice={config.get('voice')}")
@@ -375,14 +382,18 @@ def main():
         payload={"voice": bool(config.get("voice", True)), "at_home": bool(config.get("at_home", True))},
         config=config,
     )
+    trace_startup("startup event recorded")
 
     from widget import APRILWidget
+    trace_startup("APRILWidget import succeeded")
 
     widget = APRILWidget(config, on_config_change=on_config_change, on_text_submit=on_text_submit)
     _widget_ref = widget
+    trace_startup("APRILWidget constructed")
 
     print("[main] widget started - APRIL is idle")
     from input_handler import start as start_input_handler
+    trace_startup("input_handler import succeeded")
 
     input_handler = start_input_handler(
         widget,
@@ -390,13 +401,22 @@ def main():
         on_audio=on_audio_captured,
         on_interrupt=interrupt_current_request,
     )
+    trace_startup(f"input_handler started type={type(input_handler).__name__}")
 
     try:
+        trace_startup("entering widget.run()")
         widget.run()
     finally:
+        trace_startup("widget.run() exited; stopping input handler")
         input_handler.stop()
     print("[main] widget closed - shutting down")
+    trace_startup("main() shutdown complete")
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        trace_startup("__main__ entered")
+        main()
+    except Exception:
+        trace_startup("fatal exception during startup:\n" + traceback.format_exc())
+        raise

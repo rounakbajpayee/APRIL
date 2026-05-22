@@ -9,9 +9,11 @@ pipeline. STT/brain/TTS are deliberately outside this file.
 import ctypes
 import ctypes.wintypes
 import io
+import os
 import threading
 import time
 import wave
+from datetime import datetime, timezone
 
 from tts import speak as speak_reply
 
@@ -85,6 +87,15 @@ kernel32.GetModuleHandleW.argtypes = [ctypes.wintypes.LPCWSTR]
 kernel32.GetModuleHandleW.restype = ctypes.wintypes.HMODULE
 kernel32.GetCurrentThreadId.argtypes = []
 kernel32.GetCurrentThreadId.restype = ctypes.wintypes.DWORD
+
+TRACE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "startup_trace.log")
+
+
+def trace_startup(message: str) -> None:
+    os.makedirs(os.path.dirname(TRACE_PATH), exist_ok=True)
+    timestamp = datetime.now(timezone.utc).isoformat()
+    with open(TRACE_PATH, "a", encoding="utf-8") as handle:
+        handle.write(f"{timestamp} [input_handler] {message}\n")
 
 
 class AudioUnavailable(RuntimeError):
@@ -254,18 +265,23 @@ class InputHandler:
         self._lock = threading.Lock()
 
     def start(self):
+        trace_startup(f"InputHandler.start suppress_copilot={bool(self.config.get('suppress_copilot', True))}")
         if bool(self.config.get("suppress_copilot", True)):
             try:
                 self.native_hook = NativeCopilotHook(self)
                 if self.native_hook.start():
+                    trace_startup("native hook installed successfully")
                     return True
+                trace_startup("native hook start returned false")
             except Exception as exc:
+                trace_startup(f"native hook failed: {exc}")
                 self.widget.set_state("error", str(exc))
                 return False
 
         try:
             from pynput import keyboard
         except ImportError:
+            trace_startup("pynput import failed")
             self.widget.set_state("error", "pynput not installed")
             return False
 
@@ -275,6 +291,7 @@ class InputHandler:
             suppress=False,
         )
         self.listener.start()
+        trace_startup("pynput listener started")
         return True
 
     def stop(self):
@@ -301,15 +318,19 @@ class InputHandler:
         self._handle_trigger_release()
 
     def _handle_trigger_press(self):
+        trace_startup(f"_handle_trigger_press entry state={self.state} trigger_down={self.trigger_down}")
         with self._lock:
             if self.trigger_down:
+                trace_startup("_handle_trigger_press ignored because trigger already down")
                 return
             self.trigger_down = True
             if self.state == "continuous_recording":
                 self.trigger_down = False
+                trace_startup("_handle_trigger_press ending continuous recording")
                 self._stop_recording(send=True)
                 return
             if self.state != "idle":
+                trace_startup(f"_handle_trigger_press forcing stop from state={self.state}")
                 self._stop_recording(send=False)
             if self.on_interrupt:
                 try:
@@ -321,21 +342,27 @@ class InputHandler:
                 self.recorder.start()
             except AudioUnavailable as exc:
                 self.state = "idle"
+                trace_startup(f"_handle_trigger_press audio unavailable: {exc}")
                 self.widget.set_state("error", str(exc))
                 return
             except Exception as exc:
                 self.state = "idle"
+                trace_startup(f"_handle_trigger_press recorder failure: {exc}")
                 self.widget.set_state("error", f"mic failed: {exc}")
                 return
             self.state = "recording_hold"
+            trace_startup("_handle_trigger_press recorder started; state=recording_hold")
             self.widget.set_state("listening", node="local")
 
     def _handle_trigger_release(self):
+        trace_startup(f"_handle_trigger_release entry state={self.state} trigger_down={self.trigger_down}")
         with self._lock:
             if not self.trigger_down:
+                trace_startup("_handle_trigger_release ignored because trigger not down")
                 return
             self.trigger_down = False
             if self.state != "recording_hold":
+                trace_startup(f"_handle_trigger_release ignored because state={self.state}")
                 return
             now = time.monotonic()
             elapsed = now - self.f23_down_time if self.f23_down_time else 0.0
@@ -344,23 +371,31 @@ class InputHandler:
                 if self.last_tap_time and now - self.last_tap_time <= self.double_tap_window:
                     self.last_tap_time = None
                     self.state = "continuous_recording"
+                    trace_startup("_handle_trigger_release entered continuous recording")
                     self.widget.set_state("listening", "continuous", node="local")
                     return
                 self.last_tap_time = now
+                trace_startup(f"_handle_trigger_release tap detected elapsed={elapsed:.3f}")
                 self._stop_recording(send=True)
                 return
 
             self.last_tap_time = None
+            trace_startup(f"_handle_trigger_release hold detected elapsed={elapsed:.3f}")
             self._stop_recording(send=True)
 
     def _stop_recording(self, send):
+        trace_startup(f"_stop_recording send={send} state={self.state}")
         audio_bytes, duration = self.recorder.stop()
         self.state = "idle"
         self.f23_down_time = None
         self.trigger_down = False
         if not send or duration < self.min_audio_seconds or not audio_bytes:
+            trace_startup(
+                f"_stop_recording discarded send={send} duration={duration:.3f} bytes={len(audio_bytes)}"
+            )
             self.widget.set_state("idle")
             return
+        trace_startup(f"_stop_recording dispatching duration={duration:.3f} bytes={len(audio_bytes)}")
         self._dispatch_audio(audio_bytes, duration)
 
     def _dispatch_audio(self, audio_bytes, duration):

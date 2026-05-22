@@ -9,3 +9,4 @@ requests
 google-generativeai
 openai-whisper
 imageio-ffmpeg
+PyQt6>=6.6.0
