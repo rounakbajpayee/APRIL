@@ -410,17 +410,7 @@ class InputHandler:
                 if response:
                     if hasattr(self.widget, "add_text_output"):
                         self.widget.add_text_output(response)
-                    self.widget.set_state("speaking", response, node="local")
-                    if bool(self.config.get("voice", True)):
-                        started = speak_reply(
-                            response,
-                            self.config,
-                            on_done=lambda _ok: self.widget.set_state("idle", response, node="local"),
-                        )
-                        if not started:
-                            self.widget.set_state("idle", response, node="local")
-                    else:
-                        self.widget.set_state("idle", response, node="local")
+                    # main.py handles TTS and widget state transitions via speak_reply on_done
                     return
             else:
                 self.widget.set_state("speaking", "audio captured", node="local")
