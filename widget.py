@@ -737,7 +737,7 @@ class PillWindow(QWidget):
 
         self._keep_top_timer = QTimer(self)
         self._keep_top_timer.timeout.connect(self.raise_)
-        self._keep_top_timer.start(2000)
+        self._keep_top_timer.start(10000)  # less aggressive, WindowStaysOnTopHint handles it
         self._allow_close = False
         trace_startup("PillWindow timers configured")
 
@@ -760,7 +760,11 @@ class PillWindow(QWidget):
             trace_startup("PillWindow collapse scheduled at startup")
 
     def _build_window(self) -> None:
-        self.setWindowFlags(Qt.WindowType.Window)
+        self.setWindowFlags(
+            Qt.WindowType.Tool |
+            Qt.WindowType.FramelessWindowHint |
+            Qt.WindowType.WindowStaysOnTopHint
+        )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
         self.setMouseTracking(True)
         self.setStyleSheet(f"background:{WINDOW_BG};")

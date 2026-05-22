@@ -288,7 +288,13 @@ def handle_user_text(text: str, source: str = "text", request_id: int | None = N
             payload={"source": source, "request_id": request_id, "response": response},
             config=config,
         )
-        speak_reply(response, config)
+        if _widget_ref is not None:
+            _widget_ref.set_state("speaking", response)
+        speak_reply(
+            response,
+            config,
+            on_done=lambda _ok: _widget_ref.set_state("idle", response) if _widget_ref else None,
+        )
         return response
     if source == "voice":
         return f"Heard: {text}"
