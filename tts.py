@@ -19,6 +19,7 @@ from session_manager import execute as execute_session_command
 _speak_lock = threading.Lock()
 _process_lock = threading.Lock()
 _current_process = None
+_kokoro_stop = threading.Event()
 
 
 def speak(text: str, config: dict[str, Any], on_done: Callable[[bool], None] | None = None) -> bool:
@@ -34,6 +35,7 @@ def speak(text: str, config: dict[str, Any], on_done: Callable[[bool], None] | N
 
 def stop() -> None:
     global _current_process
+    _kokoro_stop.set()
     with _process_lock:
         proc = _current_process
         _current_process = None
@@ -102,6 +104,7 @@ def _speak_kokoro(text: str, config: dict[str, Any]) -> None:
     # and feed raw PCM directly. Format is always int16, mono, 24000 Hz.
     pcm = audio_data[44:]
 
+    _kokoro_stop.clear()
     pa = pyaudio.PyAudio()
     try:
         stream = pa.open(
@@ -111,7 +114,11 @@ def _speak_kokoro(text: str, config: dict[str, Any]) -> None:
             output=True,
         )
         try:
-            stream.write(pcm)
+            chunk = 4096
+            for i in range(0, len(pcm), chunk):
+                if _kokoro_stop.is_set():
+                    break
+                stream.write(pcm[i:i + chunk])
         finally:
             stream.stop_stream()
             stream.close()
