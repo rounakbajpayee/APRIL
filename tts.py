@@ -56,6 +56,9 @@ def _speak_blocking(text: str, config: dict[str, Any], on_done: Callable[[bool],
             elif engine == "say":
                 _speak_say(text, config)
                 ok = True
+            elif engine == "kokoro":
+                _speak_kokoro(text, config)
+                ok = True
             else:
                 print(f"[tts] engine unavailable: {engine}")
         except Exception as exc:
@@ -73,6 +76,47 @@ def resolve_engine(config: dict[str, Any]) -> str:
     if engine and engine != "auto":
         return engine
     return "sapi"
+
+
+def _speak_kokoro(text: str, config: dict[str, Any]) -> None:
+    import requests
+    import pyaudio
+
+    host = str(config.get("kokoro_host", "http://192.168.0.234:8002") or "http://192.168.0.234:8002").rstrip("/")
+    url = f"{host}/v1/audio/speech"
+    voice = str(config.get("tts_kokoro_voice", "bm_daniel") or "bm_daniel")
+    speed = float(config.get("tts_kokoro_speed", 1.0) or 1.0)
+    timeout = int(config.get("tts_timeout_seconds", 20) or 20)
+
+    response = requests.post(
+        url,
+        json={"input": text, "voice": voice, "speed": speed},
+        stream=True,
+        timeout=timeout,
+    )
+    response.raise_for_status()
+
+    audio_data = b"".join(response.iter_content(chunk_size=4096))
+
+    # Kokoro uses 0xFFFFFFFF placeholder RIFF sizes — skip the 44-byte WAV header
+    # and feed raw PCM directly. Format is always int16, mono, 24000 Hz.
+    pcm = audio_data[44:]
+
+    pa = pyaudio.PyAudio()
+    try:
+        stream = pa.open(
+            format=pyaudio.paInt16,
+            channels=1,
+            rate=24000,
+            output=True,
+        )
+        try:
+            stream.write(pcm)
+        finally:
+            stream.stop_stream()
+            stream.close()
+    finally:
+        pa.terminate()
 
 
 def _speak_sapi(text: str, config: dict[str, Any]) -> None:
