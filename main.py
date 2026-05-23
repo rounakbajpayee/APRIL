@@ -28,6 +28,7 @@ TRACE_PATH = os.path.join(BASE_DIR, "logs", "startup_trace.log")
 _request_lock = threading.Lock()
 _latest_request_id = 0
 _widget_ref = None
+_bridge_ref = None          # APRILBridge | None  (Phase 2: new surface system)
 _single_instance_handle = None
 _SINGLE_INSTANCE_NAME = "Local\\APRILDesktopSingleton"
 
@@ -158,6 +159,10 @@ def handle_user_text(text: str, source: str = "text", request_id: int | None = N
         payload=observation,
         config=config,
     )
+    if _bridge_ref is not None:
+        _bridge_ref.set_state("thinking")
+        _bridge_ref.set_task(f"Processing: {text[:60]}")
+
     plan = plan_with_brain(text, config)
     log_event(
         "intent_plan",
@@ -290,15 +295,34 @@ def handle_user_text(text: str, source: str = "text", request_id: int | None = N
         )
         if _widget_ref is not None:
             _widget_ref.set_state("speaking", response)
+        if _bridge_ref is not None:
+            _bridge_ref.set_state("speaking")
+            _bridge_ref.set_transcript(response)
+            _bridge_ref.set_task("Speaking")
+            _bridge_ref.append_log(f"reply ({source}): {response[:120]}")
         speak_reply(
             response,
             config,
-            on_done=lambda _ok: _widget_ref.set_state("idle", response) if _widget_ref else None,
+            on_done=lambda _ok: _on_speak_done(response),
         )
         return response
+
+    if _bridge_ref is not None:
+        _bridge_ref.set_state("idle")
+        _bridge_ref.set_task("")
+
     if source == "voice":
         return f"Heard: {text}"
     return "I heard you, but I do not have a reply yet."
+
+
+def _on_speak_done(response: str) -> None:
+    """Unified TTS completion handler — drives both old widget and new surfaces."""
+    if _widget_ref is not None:
+        _widget_ref.set_state("idle", response)
+    if _bridge_ref is not None:
+        _bridge_ref.set_state("idle")
+        _bridge_ref.set_task("")
 
 
 def on_text_submit(text: str):
@@ -320,6 +344,10 @@ def on_audio_captured(audio_bytes: bytes, duration: float):
         payload={"request_id": request_id, "duration": duration, "size_kb": round(size_kb, 1)},
         config=config,
     )
+    if _bridge_ref is not None:
+        _bridge_ref.set_state("listening")
+        _bridge_ref.set_task("Listening…")
+
     transcript, stt_meta = transcribe_with_metadata(audio_bytes, config)
     if not transcript.strip():
         print("[main] transcription unavailable")
@@ -332,6 +360,9 @@ def on_audio_captured(audio_bytes: bytes, duration: float):
             payload={"request_id": request_id, **stt_meta},
             config=config,
         )
+        if _bridge_ref is not None:
+            _bridge_ref.set_state("idle")
+            _bridge_ref.set_task("")
         return "I captured that, but I couldn't transcribe it."
 
     print(f"[main] transcript: {transcript}")
@@ -344,6 +375,9 @@ def on_audio_captured(audio_bytes: bytes, duration: float):
         payload={"request_id": request_id, "transcript": transcript, **stt_meta},
         config=config,
     )
+    if _bridge_ref is not None:
+        _bridge_ref.set_transcript(transcript)
+
     return handle_user_text(transcript, source="voice", request_id=request_id)
 
 
@@ -368,6 +402,47 @@ def _schedule_widget_config_refresh(config: dict) -> None:
     if _widget_ref is None or not hasattr(_widget_ref, "schedule_config_refresh"):
         return
     _widget_ref.schedule_config_refresh(config)
+
+
+def _start_surface_system() -> None:
+    """
+    Phase 2: start the new Figma scaffold surface system alongside the old widget.
+
+    Must be called from inside the Qt event loop (via QTimer.singleShot) so
+    that Tool windows receive their show events and actually appear on screen.
+    Isolated so any failure is caught without killing the legacy widget.
+    """
+    global _bridge_ref
+    try:
+        from ui import (
+            APRILCore, APRILBridge, AmbientAnchor,
+            TransitionalOverlay, TacticalWorkspace, SettingsPanel,
+        )
+
+        core      = APRILCore()
+        bridge    = APRILBridge(core)
+        anchor    = AmbientAnchor(core)
+        overlay   = TransitionalOverlay(core)
+        workspace = TacticalWorkspace(core)
+        settings  = SettingsPanel(core)
+
+        bridge.attach_overlay(overlay)
+        bridge.attach_workspace(workspace)
+        core.settings_requested.connect(settings.show)
+
+        anchor.show()
+        bridge.set_state("idle")
+        _bridge_ref = bridge
+
+        trace_startup("new surface system started (Phase 2 parallel mode)")
+        print("[main] new surface system started alongside legacy widget")
+
+    except Exception:
+        trace_startup(
+            "new surface system failed to start (non-fatal):\n"
+            + traceback.format_exc()
+        )
+        print("[main] WARNING: new surface system failed to start — legacy widget still running")
 
 
 def main():
@@ -396,6 +471,14 @@ def main():
     widget = APRILWidget(config, on_config_change=on_config_change, on_text_submit=on_text_submit)
     _widget_ref = widget
     trace_startup("APRILWidget constructed")
+
+    # ── Phase 2: schedule new surface system to start on first event loop tick ─
+    # QTimer.singleShot(0) defers until after app.exec() starts so Tool windows
+    # receive their show events and are actually painted on screen.
+    from PyQt6.QtCore import QTimer
+    QTimer.singleShot(0, _start_surface_system)
+    trace_startup("surface system startup scheduled (singleShot 0)")
+    # ──────────────────────────────────────────────────────────────────────────
 
     print("[main] widget started - APRIL is idle")
     from input_handler import start as start_input_handler
