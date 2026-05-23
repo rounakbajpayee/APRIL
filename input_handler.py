@@ -126,6 +126,12 @@ class AudioRecorder:
         self._pyaudio = pyaudio
         return pyaudio
 
+    def _set_widget_state(self, *args, **kwargs):
+        """Safe wrapper — widget may be None during surface-only mode."""
+        trace_startup(f"TRACE1 INPUT _set_widget_state called widget_is_none={self.widget is None} args={args}")
+        if self.widget is not None:
+            self.widget.set_state(*args, **kwargs)
+
     def start(self):
         with self._lock:
             if self._recording.is_set():
@@ -238,6 +244,13 @@ class NativeCopilotHook:
         if n_code == HC_ACTION:
             event = ctypes.cast(l_param, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
             if event.vkCode == VK_F23:
+                # Filter injected events: the Copilot key fires a synthetic
+                # injected event (LLKHF_INJECTED, flags bit 4 = 0x10) before
+                # the real hardware event.  Ignore injected events so that
+                # only the real keydown/keyup reaches the handler.
+                LLKHF_INJECTED = 0x10
+                if event.flags & LLKHF_INJECTED:
+                    return 1  # suppress but do not dispatch
                 if w_param in (WM_KEYDOWN, WM_SYSKEYDOWN):
                     threading.Thread(target=self.handler._handle_trigger_press, daemon=True).start()
                 elif w_param in (WM_KEYUP, WM_SYSKEYUP):
@@ -264,6 +277,12 @@ class InputHandler:
         self.min_audio_seconds = float(config.get("copilot_min_audio_seconds", 0.5))
         self._lock = threading.Lock()
 
+    def _set_widget_state(self, *args, **kwargs):
+        """Route widget state calls to the bridge shim. Explicit so daemon-thread
+        AttributeErrors cannot be silently swallowed by pythonw.exe."""
+        if self.widget is not None:
+            self.widget.set_state(*args, **kwargs)
+
     def start(self):
         trace_startup(f"InputHandler.start suppress_copilot={bool(self.config.get('suppress_copilot', True))}")
         if bool(self.config.get("suppress_copilot", True)):
@@ -275,14 +294,14 @@ class InputHandler:
                 trace_startup("native hook start returned false")
             except Exception as exc:
                 trace_startup(f"native hook failed: {exc}")
-                self.widget.set_state("error", str(exc))
+                self._set_widget_state("error", str(exc))
                 return False
 
         try:
             from pynput import keyboard
         except ImportError:
             trace_startup("pynput import failed")
-            self.widget.set_state("error", "pynput not installed")
+            self._set_widget_state("error", "pynput not installed")
             return False
 
         self.listener = keyboard.Listener(
@@ -343,16 +362,25 @@ class InputHandler:
             except AudioUnavailable as exc:
                 self.state = "idle"
                 trace_startup(f"_handle_trigger_press audio unavailable: {exc}")
-                self.widget.set_state("error", str(exc))
+                self._set_widget_state("error", str(exc))
                 return
             except Exception as exc:
                 self.state = "idle"
                 trace_startup(f"_handle_trigger_press recorder failure: {exc}")
-                self.widget.set_state("error", f"mic failed: {exc}")
+                self._set_widget_state("error", f"mic failed: {exc}")
                 return
             self.state = "recording_hold"
             trace_startup("_handle_trigger_press recorder started; state=recording_hold")
-            self.widget.set_state("listening", node="local")
+            trace_startup("TRACE1 INPUT state=listening")
+            trace_startup(f"TRACE1 INPUT widget={self.widget!r} widget_type={type(self.widget).__name__}")
+            try:
+                self._set_widget_state("listening", node="local")
+            except Exception:
+                import traceback as _tb
+                trace_startup("TRACE1 INPUT _set_widget_state EXCEPTION")
+                trace_startup(_tb.format_exc())
+                raise
+            trace_startup("TRACE1 INPUT _set_widget_state returned")
 
     def _handle_trigger_release(self):
         trace_startup(f"_handle_trigger_release entry state={self.state} trigger_down={self.trigger_down}")
@@ -372,7 +400,7 @@ class InputHandler:
                     self.last_tap_time = None
                     self.state = "continuous_recording"
                     trace_startup("_handle_trigger_release entered continuous recording")
-                    self.widget.set_state("listening", "continuous", node="local")
+                    self._set_widget_state("listening", "continuous", node="local")
                     return
                 self.last_tap_time = now
                 trace_startup(f"_handle_trigger_release tap detected elapsed={elapsed:.3f}")
@@ -393,29 +421,44 @@ class InputHandler:
             trace_startup(
                 f"_stop_recording discarded send={send} duration={duration:.3f} bytes={len(audio_bytes)}"
             )
-            self.widget.set_state("idle")
+            trace_startup("TRACE1 INPUT state=idle (discarded)")
+            try:
+                self._set_widget_state("idle")
+            except Exception:
+                import traceback as _tb
+                trace_startup("TRACE1 INPUT _set_widget_state EXCEPTION (idle)")
+                trace_startup(_tb.format_exc())
+                raise
             return
         trace_startup(f"_stop_recording dispatching duration={duration:.3f} bytes={len(audio_bytes)}")
+        trace_startup("TRACE1 INPUT recorder.stop dispatching to pipeline")
         self._dispatch_audio(audio_bytes, duration)
 
     def _dispatch_audio(self, audio_bytes, duration):
         def run_pipeline():
-            self.widget.set_state("thinking", "transcription pending", node="local")
+            trace_startup("TRACE1 INPUT state=thinking (pipeline entry)")
+            try:
+                self._set_widget_state("thinking", "transcription pending", node="local")
+            except Exception:
+                import traceback as _tb
+                trace_startup("TRACE1 INPUT _set_widget_state EXCEPTION (thinking)")
+                trace_startup(_tb.format_exc())
+                raise
             if self.on_audio:
                 try:
                     response = self.on_audio(audio_bytes, duration)
                 except Exception as exc:
-                    self.widget.set_state("error", f"audio pipeline failed: {exc}")
+                    self._set_widget_state("error", f"audio pipeline failed: {exc}")
                     return
-                if response:
-                    if hasattr(self.widget, "add_text_output"):
-                        self.widget.add_text_output(response)
-                    # main.py handles TTS and widget state transitions via speak_reply on_done
-                    return
+                # on_audio drives the rest of the state machine (thinking →
+                # speaking → idle) internally via the bridge.  Do not set
+                # idle here — that would race with the TTS on_done callback.
+                if response and hasattr(self.widget, "add_text_output"):
+                    self.widget.add_text_output(response)
             else:
-                self.widget.set_state("speaking", "audio captured", node="local")
+                self._set_widget_state("speaking", "audio captured", node="local")
                 time.sleep(1.2)
-            self.widget.set_state("idle")
+                self._set_widget_state("idle")
 
         threading.Thread(target=run_pipeline, daemon=True).start()
 

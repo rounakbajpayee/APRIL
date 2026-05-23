@@ -1,8 +1,8 @@
 """
 AmbientAnchor — the persistent corner orb.
 
-Frameless, always-on-top, opaque with circular mask.  Custom-painted state
-animations driven by a QTimer at ~60 fps.  Drag snaps to nearest screen corner.
+Frameless, always-on-top, transparent.  Custom-painted state animations
+driven by a QTimer at ~60 fps.  Drag snaps to nearest screen corner.
 """
 from __future__ import annotations
 import math
@@ -55,10 +55,10 @@ class AmbientAnchor(QWidget):
         self._timer.timeout.connect(self._tick)
         self._timer.start()
 
-        # Keep-on-top: re-raise every 15 s to survive DWM z-order resets
+        # Keep-on-top: Win32 HWND_TOPMOST every 15 s to survive z-order fights
         self._top_timer = QTimer(self)
         self._top_timer.setInterval(15000)
-        self._top_timer.timeout.connect(self.raise_)
+        self._top_timer.timeout.connect(self._force_topmost)
         self._top_timer.start()
 
         core.state_changed.connect(self._on_state_changed)
@@ -70,21 +70,32 @@ class AmbientAnchor(QWidget):
     def _setup_window(self):
         size = theme.ORB_SIZE + self._PAD * 2
         self.setFixedSize(size, size)
-        # FIX-01: opaque background — no WA_TranslucentBackground
         self.setStyleSheet("background: rgb(7, 11, 16);")
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint |
             Qt.WindowType.WindowStaysOnTopHint |
-            Qt.WindowType.Tool               # no taskbar entry
+            Qt.WindowType.Tool
         )
         self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
 
-        # FIX-11: do NOT use setMask — on Windows with DPI scaling the
-        # QRegion ellipse mask makes the window invisible or unclickable.
-        # Circular appearance is achieved purely in paintEvent (fills corners
-        # with the background colour).  Mouse events work on the full square
-        # hit-area which is intentional — _PAD gives extra click margin.
-        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
+        # Clip window to circular shape — mask covers only the orb area,
+        # leaving the _PAD border transparent/non-interactive.
+        from PyQt6.QtGui import QRegion
+        pad = self._PAD
+        orb = theme.ORB_SIZE
+        self.setMask(QRegion(pad, pad, orb, orb, QRegion.RegionType.Ellipse))
+
+    def _force_topmost(self):
+        """Win32 SetWindowPos HWND_TOPMOST — survives z-order fights."""
+        import ctypes
+        SWP_NOMOVE    = 0x0002
+        SWP_NOSIZE    = 0x0001
+        SWP_NOACTIVATE = 0x0010
+        HWND_TOPMOST  = -1
+        ctypes.windll.user32.SetWindowPos(
+            int(self.winId()), HWND_TOPMOST, 0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE
+        )
 
     def _place_in_corner(self, corner: Corner):
         screen = QApplication.primaryScreen().availableGeometry()
@@ -111,6 +122,16 @@ class AmbientAnchor(QWidget):
             APRILState.ERROR:     0.030,
         }
         self._phase = (self._phase + speeds.get(state, 0.005)) % 1.0
+        # TRACE7: log repaint only when state changes, not every frame (60fps would flood log)
+        if not hasattr(self, "_last_logged_state") or self._last_logged_state != state:
+            self._last_logged_state = state
+            try:
+                import os, datetime
+                _tp = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs", "startup_trace.log")
+                with open(_tp, "a") as _f:
+                    _f.write(f"{datetime.datetime.now(datetime.timezone.utc).isoformat()} [anchor] TRACE7 ANCHOR repaint requested state={state.name}\n")
+            except Exception:
+                pass
         self.update()
 
     # ------------------------------------------------------------------ painting
@@ -124,7 +145,7 @@ class AmbientAnchor(QWidget):
         cy = self.height() / 2
         r  = theme.ORB_SIZE / 2
 
-        # Fill circular area with dark background (FIX-01: explicit fill instead of transparency)
+        # Fill circular area with dark background
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QBrush(QColor(7, 11, 16)))
         p.drawEllipse(int(cx - r), int(cy - r), int(r * 2), int(r * 2))
@@ -176,13 +197,12 @@ class AmbientAnchor(QWidget):
         p.drawEllipse(int(cx - r), int(cy - r), int(r * 2), int(r * 2))
 
     def _draw_dormant(self, p: QPainter, cx, cy, r, color: QColor):
-        # FIX-06: slow opacity pulse only — static size, no breathing
         alpha = int(70 + math.sin(self._phase * math.tau) * 35)
         c = QColor(color)
         c.setAlpha(alpha)
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QBrush(c))
-        dot_r = 3.5  # static — no radius breathing
+        dot_r = 3.5
         p.drawEllipse(int(cx - dot_r), int(cy - dot_r), int(dot_r * 2), int(dot_r * 2))
 
     def _draw_listening(self, p: QPainter, cx, cy, r, color: QColor):
@@ -293,8 +313,12 @@ class AmbientAnchor(QWidget):
 
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton and self._drag_start is not None:
+            delta = event.globalPosition().toPoint() - self._drag_start
+            if delta.manhattanLength() < 5:  # tap, not drag
+                self._core.escalate()
+            else:
+                self._snap_to_corner()
             self._drag_start = None
-            self._snap_to_corner()
 
     def mouseDoubleClickEvent(self, _event):
         self._core.escalate()
@@ -305,8 +329,8 @@ class AmbientAnchor(QWidget):
         menu.setStyleSheet(_MENU_STYLE)
 
         menu.addSection("Mode")
-        for label, m in [("Ambient", APRILMode.AMBIENT),
-                          ("Focus",   APRILMode.FOCUS),
+        for label, m in [("Ambient",  APRILMode.AMBIENT),
+                          ("Focus",    APRILMode.FOCUS),
                           ("Tactical", APRILMode.TACTICAL)]:
             act = menu.addAction(label)
             act.setCheckable(True)
@@ -344,8 +368,14 @@ class AmbientAnchor(QWidget):
     # ------------------------------------------------------------------ slots
 
     def _on_state_changed(self, state: APRILState):
+        try:
+            import os, datetime
+            _tp = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs", "startup_trace.log")
+            with open(_tp, "a") as _f:
+                _f.write(f"{datetime.datetime.now(datetime.timezone.utc).isoformat()} [anchor] TRACE6 ANCHOR state={state.name}\n")
+        except Exception:
+            pass
         self._phase = 0.0
-        # FIX-06: dormant at 15fps, active states at 60fps
         if state == APRILState.DORMANT:
             self._timer.setInterval(66)
         else:

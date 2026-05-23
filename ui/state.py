@@ -61,9 +61,20 @@ class APRILCore(QObject):
         return self._state
 
     def set_state(self, s: APRILState) -> None:
+        import os, datetime
+        def _t(msg):
+            try:
+                _tp = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs", "startup_trace.log")
+                with open(_tp, "a") as _f:
+                    _f.write(f"{datetime.datetime.now(datetime.timezone.utc).isoformat()} [state] {msg}\n")
+            except Exception:
+                pass
         if self._state != s:
+            _t(f"TRACE5 CORE old={self._state.name} new={s.name}")
             self._state = s
             self.state_changed.emit(s)
+        else:
+            _t(f"TRACE5 CORE dedupe suppressed state={s.name} (already {self._state.name})")
 
     # --- Mode ---
 

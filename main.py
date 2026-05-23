@@ -6,6 +6,7 @@ import ctypes
 from datetime import datetime, timezone
 import json
 import os
+import sys
 import threading
 import traceback
 
@@ -406,11 +407,18 @@ def _schedule_widget_config_refresh(config: dict) -> None:
 
 def _start_surface_system() -> None:
     """
-    Phase 2: start the new Figma scaffold surface system alongside the old widget.
+    Phase 2: start the new Figma scaffold surface system.
 
-    Must be called from inside the Qt event loop (via QTimer.singleShot) so
-    that Tool windows receive their show events and actually appear on screen.
-    Isolated so any failure is caught without killing the legacy widget.
+    Must be called AFTER QApplication exists but BEFORE APRILWidget (PillWindow)
+    is constructed. AmbientAnchor must be the first native QWidget created so it
+    claims the process-wide surface format with an alpha channel.
+
+    Root cause confirmed 2026-05-23:
+    Qt resolves the process-wide surface format on first native window creation.
+    If PillWindow (WA_TranslucentBackground=False) is first, it claims a
+    non-alpha format and all subsequent WA_TranslucentBackground windows
+    silently render as dark opaque rectangles.
+    Fix: orb first → alpha format claimed → pill inherits it → both visible.
     """
     global _bridge_ref
     try:
@@ -431,19 +439,13 @@ def _start_surface_system() -> None:
         core.settings_requested.connect(settings.show)
 
         anchor.show()
-        anchor.raise_()
-        # Deferred raise: DWM on Windows can suppress Tool windows that are
-        # shown by a process without current foreground rights.  A second
-        # raise_() 500 ms later forces the window to the top after the
-        # compositor has settled.
-        from PyQt6.QtCore import QTimer as _QTimer
-        _QTimer.singleShot(500, anchor.raise_)
+        anchor._force_topmost()
 
         bridge.set_state("idle")
         _bridge_ref = bridge
 
         trace_startup("new surface system started (Phase 2 parallel mode)")
-        print("[main] new surface system started alongside legacy widget")
+        print("[main] new surface system started")
 
     except Exception:
         trace_startup(
@@ -473,27 +475,51 @@ def main():
     )
     trace_startup("startup event recorded")
 
-    from widget import APRILWidget
-    trace_startup("APRILWidget import succeeded")
+    # ── QApplication ────────────────────────────────────────────────────────
+    from PyQt6.QtWidgets import QApplication
+    app = QApplication.instance() or QApplication(sys.argv[:1])
+    app.setQuitOnLastWindowClosed(False)
+    trace_startup("QApplication created in main()")
+    # ────────────────────────────────────────────────────────────────────────
 
-    widget = APRILWidget(config, on_config_change=on_config_change, on_text_submit=on_text_submit)
-    _widget_ref = widget
-    trace_startup("APRILWidget constructed")
+    # ── Phase 3: surface system only, widget.py bypassed ───────────────────
+    from ui import APRILCore, APRILBridge, AmbientAnchor, TransitionalOverlay, TacticalWorkspace, SettingsPanel
+    core      = APRILCore()
+    bridge    = APRILBridge(core)
+    anchor    = AmbientAnchor(core)
+    overlay   = TransitionalOverlay(core)
+    workspace = TacticalWorkspace(core)
+    settings  = SettingsPanel(core)
+    bridge.attach_overlay(overlay)
+    bridge.attach_workspace(workspace)
+    core.settings_requested.connect(settings.show)
+    anchor.show()
+    anchor._force_topmost()
+    global _bridge_ref
+    bridge.set_state("idle")
+    _bridge_ref = bridge
+    trace_startup("surface system started (orb-only mode)")
+    print("[main] surface system started")
 
-    # ── Phase 2: schedule new surface system to start on first event loop tick ─
-    # QTimer.singleShot(0) defers until after app.exec() starts so Tool windows
-    # receive their show events and are actually painted on screen.
-    from PyQt6.QtCore import QTimer
-    QTimer.singleShot(0, _start_surface_system)
-    trace_startup("surface system startup scheduled (singleShot 0)")
-    # ──────────────────────────────────────────────────────────────────────────
-
-    print("[main] widget started - APRIL is idle")
     from input_handler import start as start_input_handler
-    trace_startup("input_handler import succeeded")
+
+    # Shim: input_handler expects a widget with set_state(state, *args).
+    # We have no widget in Phase 3, so route those calls through the bridge.
+    # NOTE: bridge is passed explicitly at construction time — do NOT read
+    # _bridge_ref inside set_state().  The shim is defined inside main() so
+    # a closure over _bridge_ref would capture the local scope, not the
+    # module global, and the reference would be stale once main() returns.
+    class _BridgeShim:
+        """Translates input_handler widget calls into APRILBridge calls."""
+        def __init__(self, b):
+            self._b = b
+        def set_state(self, state: str, *args, **kwargs):
+            trace_startup(f"TRACE2 SHIM state={state} bridge_present={self._b is not None}")
+            if self._b is not None:
+                self._b.set_state(state)
 
     input_handler = start_input_handler(
-        widget,
+        _BridgeShim(bridge),
         config,
         on_audio=on_audio_captured,
         on_interrupt=interrupt_current_request,
@@ -501,13 +527,12 @@ def main():
     trace_startup(f"input_handler started type={type(input_handler).__name__}")
 
     try:
-        trace_startup("entering widget.run()")
-        widget.run()
+        trace_startup("entering app.exec()")
+        app.exec()
     finally:
-        trace_startup("widget.run() exited; stopping input handler")
+        trace_startup("app.exec() returned — shutdown complete")
         input_handler.stop()
-    print("[main] widget closed - shutting down")
-    trace_startup("main() shutdown complete")
+    print("[main] surface system closed - shutting down")
 
 
 if __name__ == "__main__":

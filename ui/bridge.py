@@ -110,6 +110,13 @@ class APRILBridge(QObject):
         ``state`` is the runtime string — "idle", "listening", "thinking",
         "speaking", "error", etc.  Call from any thread.
         """
+        try:
+            import os, datetime
+            _tp = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs", "startup_trace.log")
+            with open(_tp, "a") as _f:
+                _f.write(f"{datetime.datetime.now(datetime.timezone.utc).isoformat()} [bridge] TRACE3 BRIDGE emit state={state!r}\n")
+        except Exception:
+            pass
         self._state_sig.emit(state)
 
     def set_transcript(self, text: str) -> None:
@@ -149,6 +156,14 @@ class APRILBridge(QObject):
 
     def _apply_state(self, state_str: str) -> None:
         april_state = _STATE_MAP.get(state_str.lower(), APRILState.DORMANT)
+        # Trace to startup log so we can confirm signal delivery from background threads
+        try:
+            import os, datetime
+            trace_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs", "startup_trace.log")
+            with open(trace_path, "a") as _f:
+                _f.write(f"{datetime.datetime.now(datetime.timezone.utc).isoformat()} [bridge] TRACE4 BRIDGE APPLY state={state_str!r} -> {april_state.name}\n")
+        except Exception:
+            pass
         self._core.set_state(april_state)
 
     def _apply_transcript(self, text: str) -> None:
