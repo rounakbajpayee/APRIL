@@ -28,8 +28,7 @@ DEFAULT_PATH = os.path.join(BASE_DIR, "config_defaults.json")
 TRACE_PATH = os.path.join(BASE_DIR, "logs", "startup_trace.log")
 _request_lock = threading.Lock()
 _latest_request_id = 0
-_widget_ref = None
-_bridge_ref = None          # APRILBridge | None  (Phase 2: new surface system)
+_bridge_ref = None          # APRILBridge | None
 _single_instance_handle = None
 _SINGLE_INSTANCE_NAME = "Local\\APRILDesktopSingleton"
 
@@ -260,8 +259,6 @@ def handle_user_text(text: str, source: str = "text", request_id: int | None = N
                 payload={"source": source, "updates": updates},
                 config=config,
             )
-        if _widget_ref is not None:
-            _schedule_widget_config_refresh(config)
 
     record_semantic_example(
         kind="turn",
@@ -294,8 +291,6 @@ def handle_user_text(text: str, source: str = "text", request_id: int | None = N
             payload={"source": source, "request_id": request_id, "response": response},
             config=config,
         )
-        if _widget_ref is not None:
-            _widget_ref.set_state("speaking", response)
         if _bridge_ref is not None:
             _bridge_ref.set_state("speaking")
             _bridge_ref.set_transcript(response)
@@ -318,9 +313,7 @@ def handle_user_text(text: str, source: str = "text", request_id: int | None = N
 
 
 def _on_speak_done(response: str) -> None:
-    """Unified TTS completion handler — drives both old widget and new surfaces."""
-    if _widget_ref is not None:
-        _widget_ref.set_state("idle", response)
+    """TTS completion handler — drives the bridge back to idle."""
     if _bridge_ref is not None:
         _bridge_ref.set_state("idle")
         _bridge_ref.set_task("")
@@ -399,64 +392,8 @@ def acquire_single_instance() -> bool:
     return True
 
 
-def _schedule_widget_config_refresh(config: dict) -> None:
-    if _widget_ref is None or not hasattr(_widget_ref, "schedule_config_refresh"):
-        return
-    _widget_ref.schedule_config_refresh(config)
-
-
-def _start_surface_system() -> None:
-    """
-    Phase 2: start the new Figma scaffold surface system.
-
-    Must be called AFTER QApplication exists but BEFORE APRILWidget (PillWindow)
-    is constructed. AmbientAnchor must be the first native QWidget created so it
-    claims the process-wide surface format with an alpha channel.
-
-    Root cause confirmed 2026-05-23:
-    Qt resolves the process-wide surface format on first native window creation.
-    If PillWindow (WA_TranslucentBackground=False) is first, it claims a
-    non-alpha format and all subsequent WA_TranslucentBackground windows
-    silently render as dark opaque rectangles.
-    Fix: orb first → alpha format claimed → pill inherits it → both visible.
-    """
-    global _bridge_ref
-    try:
-        from ui import (
-            APRILCore, APRILBridge, AmbientAnchor,
-            TransitionalOverlay, TacticalWorkspace, SettingsPanel,
-        )
-
-        core      = APRILCore()
-        bridge    = APRILBridge(core)
-        anchor    = AmbientAnchor(core)
-        overlay   = TransitionalOverlay(core)
-        workspace = TacticalWorkspace(core)
-        settings  = SettingsPanel(core)
-
-        bridge.attach_overlay(overlay)
-        bridge.attach_workspace(workspace)
-        core.settings_requested.connect(settings.show)
-
-        anchor.show()
-        anchor._force_topmost()
-
-        bridge.set_state("idle")
-        _bridge_ref = bridge
-
-        trace_startup("new surface system started (Phase 2 parallel mode)")
-        print("[main] new surface system started")
-
-    except Exception:
-        trace_startup(
-            "new surface system failed to start (non-fatal):\n"
-            + traceback.format_exc()
-        )
-        print("[main] WARNING: new surface system failed to start — legacy widget still running")
-
-
 def main():
-    global _widget_ref
+    global _bridge_ref
     trace_startup("main() entered")
     config = load_config()
     trace_startup(f"config loaded voice={config.get('voice')} at_home={config.get('at_home')}")
@@ -482,7 +419,7 @@ def main():
     trace_startup("QApplication created in main()")
     # ────────────────────────────────────────────────────────────────────────
 
-    # ── Phase 3: surface system only, widget.py bypassed ───────────────────
+    # ── Surface system ───────────────────────────────────────────────────────
     from ui import APRILCore, APRILBridge, AmbientAnchor, TransitionalOverlay, TacticalWorkspace, SettingsPanel
     core      = APRILCore()
     bridge    = APRILBridge(core)
@@ -495,31 +432,18 @@ def main():
     core.settings_requested.connect(settings.show)
     anchor.show()
     anchor._force_topmost()
-    global _bridge_ref
     bridge.set_state("idle")
     _bridge_ref = bridge
-    trace_startup("surface system started (orb-only mode)")
+    trace_startup("surface system started")
     print("[main] surface system started")
+    # ────────────────────────────────────────────────────────────────────────
 
     from input_handler import start as start_input_handler
 
-    # Shim: input_handler expects a widget with set_state(state, *args).
-    # We have no widget in Phase 3, so route those calls through the bridge.
-    # NOTE: bridge is passed explicitly at construction time — do NOT read
-    # _bridge_ref inside set_state().  The shim is defined inside main() so
-    # a closure over _bridge_ref would capture the local scope, not the
-    # module global, and the reference would be stale once main() returns.
-    class _BridgeShim:
-        """Translates input_handler widget calls into APRILBridge calls."""
-        def __init__(self, b):
-            self._b = b
-        def set_state(self, state: str, *args, **kwargs):
-            trace_startup(f"TRACE2 SHIM state={state} bridge_present={self._b is not None}")
-            if self._b is not None:
-                self._b.set_state(state)
-
+    # APRILBridge.set_state(str) satisfies the RuntimeStateSink protocol directly.
+    # No shim required.
     input_handler = start_input_handler(
-        _BridgeShim(bridge),
+        bridge,
         config,
         on_audio=on_audio_captured,
         on_interrupt=interrupt_current_request,
