@@ -77,6 +77,9 @@ class AmbientAnchor(QWidget):
         pad = self._PAD
         orb = theme.ORB_SIZE
         self.setMask(QRegion(pad, pad, orb, orb, QRegion.RegionType.Ellipse))
+        # FIX-10: explicitly allow mouse events — QRegion mask can suppress
+        # hit-testing on some Windows compositor configurations.
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
 
     def _place_in_corner(self, corner: Corner):
         screen = QApplication.primaryScreen().availableGeometry()
