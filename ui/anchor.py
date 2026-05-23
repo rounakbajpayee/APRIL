@@ -12,7 +12,7 @@ from PyQt6.QtCore import (
 )
 from PyQt6.QtGui import (
     QPainter, QPen, QBrush, QRadialGradient, QColor,
-    QLinearGradient, QPainterPath, QCursor, QRegion
+    QLinearGradient, QPainterPath, QCursor
 )
 from PyQt6.QtWidgets import QWidget, QApplication
 
@@ -73,12 +73,11 @@ class AmbientAnchor(QWidget):
         )
         self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
 
-        # Clip window to circular shape using mask (FIX-01)
-        pad = self._PAD
-        orb = theme.ORB_SIZE
-        self.setMask(QRegion(pad, pad, orb, orb, QRegion.RegionType.Ellipse))
-        # FIX-10: explicitly allow mouse events — QRegion mask can suppress
-        # hit-testing on some Windows compositor configurations.
+        # FIX-11: do NOT use setMask — on Windows with DPI scaling the
+        # QRegion ellipse mask makes the window invisible or unclickable.
+        # Circular appearance is achieved purely in paintEvent (fills corners
+        # with the background colour).  Mouse events work on the full square
+        # hit-area which is intentional — _PAD gives extra click margin.
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
 
     def _place_in_corner(self, corner: Corner):
