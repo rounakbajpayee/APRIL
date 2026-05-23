@@ -431,6 +431,14 @@ def _start_surface_system() -> None:
         core.settings_requested.connect(settings.show)
 
         anchor.show()
+        anchor.raise_()
+        # Deferred raise: DWM on Windows can suppress Tool windows that are
+        # shown by a process without current foreground rights.  A second
+        # raise_() 500 ms later forces the window to the top after the
+        # compositor has settled.
+        from PyQt6.QtCore import QTimer as _QTimer
+        _QTimer.singleShot(500, anchor.raise_)
+
         bridge.set_state("idle")
         _bridge_ref = bridge
 

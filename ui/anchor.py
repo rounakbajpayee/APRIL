@@ -55,6 +55,12 @@ class AmbientAnchor(QWidget):
         self._timer.timeout.connect(self._tick)
         self._timer.start()
 
+        # Keep-on-top: re-raise every 15 s to survive DWM z-order resets
+        self._top_timer = QTimer(self)
+        self._top_timer.setInterval(15000)
+        self._top_timer.timeout.connect(self.raise_)
+        self._top_timer.start()
+
         core.state_changed.connect(self._on_state_changed)
         core.mode_changed.connect(self._on_mode_changed)
         core.corner_changed.connect(self._place_in_corner)
