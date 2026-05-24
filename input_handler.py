@@ -13,8 +13,8 @@ import os
 import threading
 import time
 import wave
-from datetime import datetime, timezone
 
+import runtime_trace
 from runtime_state_sink import RuntimeStateSink
 from tts import speak as speak_reply
 
@@ -89,14 +89,9 @@ kernel32.GetModuleHandleW.restype = ctypes.wintypes.HMODULE
 kernel32.GetCurrentThreadId.argtypes = []
 kernel32.GetCurrentThreadId.restype = ctypes.wintypes.DWORD
 
-TRACE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "startup_trace.log")
-
 
 def trace_startup(message: str) -> None:
-    os.makedirs(os.path.dirname(TRACE_PATH), exist_ok=True)
-    timestamp = datetime.now(timezone.utc).isoformat()
-    with open(TRACE_PATH, "a", encoding="utf-8") as handle:
-        handle.write(f"{timestamp} [input_handler] {message}\n")
+    runtime_trace.trace_marker(f"[input_handler] {message}")
 
 
 class AudioUnavailable(RuntimeError):

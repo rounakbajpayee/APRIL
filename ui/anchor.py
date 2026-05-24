@@ -5,6 +5,8 @@ Frameless, always-on-top, transparent.  Custom-painted state animations
 driven by a QTimer at ~60 fps.  Drag snaps to nearest screen corner.
 """
 from __future__ import annotations
+import runtime_trace
+
 import math
 from PyQt6.QtCore import (
     Qt, QTimer, QPoint, QRect, QPropertyAnimation,
@@ -125,13 +127,7 @@ class AmbientAnchor(QWidget):
         # TRACE7: log repaint only when state changes, not every frame (60fps would flood log)
         if not hasattr(self, "_last_logged_state") or self._last_logged_state != state:
             self._last_logged_state = state
-            try:
-                import os, datetime
-                _tp = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs", "startup_trace.log")
-                with open(_tp, "a") as _f:
-                    _f.write(f"{datetime.datetime.now(datetime.timezone.utc).isoformat()} [anchor] TRACE7 ANCHOR repaint requested state={state.name}\n")
-            except Exception:
-                pass
+            runtime_trace.trace_marker(f"[anchor] TRACE7 ANCHOR repaint requested state={state.name}")
         self.update()
 
     # ------------------------------------------------------------------ painting
@@ -368,13 +364,7 @@ class AmbientAnchor(QWidget):
     # ------------------------------------------------------------------ slots
 
     def _on_state_changed(self, state: APRILState):
-        try:
-            import os, datetime
-            _tp = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs", "startup_trace.log")
-            with open(_tp, "a") as _f:
-                _f.write(f"{datetime.datetime.now(datetime.timezone.utc).isoformat()} [anchor] TRACE6 ANCHOR state={state.name}\n")
-        except Exception:
-            pass
+        runtime_trace.trace_marker(f"[anchor] TRACE6 ANCHOR state={state.name}")
         self._phase = 0.0
         if state == APRILState.DORMANT:
             self._timer.setInterval(66)

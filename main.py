@@ -20,6 +20,7 @@ from observer import collect_runtime_observation
 from state_engine import refresh_state_snapshot
 from stt import transcribe_with_metadata
 from tts import speak as speak_reply, stop as stop_speaking
+import runtime_trace
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -34,10 +35,7 @@ _SINGLE_INSTANCE_NAME = "Local\\APRILDesktopSingleton"
 
 
 def trace_startup(message: str) -> None:
-    os.makedirs(os.path.dirname(TRACE_PATH), exist_ok=True)
-    timestamp = datetime.now(timezone.utc).isoformat()
-    with open(TRACE_PATH, "a", encoding="utf-8") as handle:
-        handle.write(f"{timestamp} [main] {message}\n")
+    runtime_trace.trace_marker(f"[main] {message}")
 
 
 def load_config() -> dict:
@@ -412,14 +410,14 @@ def main():
     )
     trace_startup("startup event recorded")
 
-    # ── QApplication ────────────────────────────────────────────────────────
+    # ── QApplication ────────────────────────────────────────────────────────────────────────
     from PyQt6.QtWidgets import QApplication
     app = QApplication.instance() or QApplication(sys.argv[:1])
     app.setQuitOnLastWindowClosed(False)
     trace_startup("QApplication created in main()")
-    # ────────────────────────────────────────────────────────────────────────
+    # ────────────────────────────────────────────────────────────────────────────────
 
-    # ── Surface system ───────────────────────────────────────────────────────
+    # ── Surface system ───────────────────────────────────────────────────────────────────────
     from ui import APRILCore, APRILBridge, AmbientAnchor, TransitionalOverlay, TacticalWorkspace, SettingsPanel
     core      = APRILCore()
     bridge    = APRILBridge(core)
@@ -436,7 +434,7 @@ def main():
     _bridge_ref = bridge
     trace_startup("surface system started")
     print("[main] surface system started")
-    # ────────────────────────────────────────────────────────────────────────
+    # ────────────────────────────────────────────────────────────────────────────────
 
     from input_handler import start as start_input_handler
 
@@ -456,6 +454,7 @@ def main():
     finally:
         trace_startup("app.exec() returned — shutdown complete")
         input_handler.stop()
+        runtime_trace.shutdown()
     print("[main] surface system closed - shutting down")
 
 
