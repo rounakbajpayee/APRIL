@@ -423,16 +423,28 @@ class InputHandler:
                 return
             self.state = "recording_hold"
             trace_startup("_handle_trigger_press recorder started; state=recording_hold")
-            trace_startup("TRACE1 INPUT state=listening")
-            trace_startup(f"TRACE1 INPUT surface={self._surface!r} surface_type={type(self._surface).__name__}")
+            runtime_trace.trace_event(
+                "surface_state_push",
+                subsystem="input",
+                request_id=request_id,
+                payload={
+                    "state": "listening",
+                    "surface_type": type(self._surface).__name__,
+                },
+            )
             try:
                 self._update_surface_state("listening", request_id=request_id)
-            except Exception:
+            except Exception as _exc:
                 import traceback as _tb
-                trace_startup("TRACE1 INPUT _update_surface_state EXCEPTION")
-                trace_startup(_tb.format_exc())
+                runtime_trace.trace_event(
+                    "surface_state_push_error",
+                    subsystem="input",
+                    severity=runtime_trace.ERROR,
+                    request_id=request_id,
+                    payload={"state": "listening", "error": str(_exc)},
+                )
+                trace_startup("surface_state_push EXCEPTION (listening)\n" + _tb.format_exc())
                 raise
-            trace_startup("TRACE1 INPUT _update_surface_state returned")
 
     def _handle_trigger_release(self):
         trace_startup(f"_handle_trigger_release entry state={self.state} trigger_down={self.trigger_down}")
@@ -474,7 +486,6 @@ class InputHandler:
             trace_startup(
                 f"_stop_recording discarded send={send} duration={duration:.3f} bytes={len(audio_bytes)}"
             )
-            trace_startup("TRACE1 INPUT state=idle (discarded)")
             runtime_trace.trace_event(
                 "interaction_discarded",
                 subsystem="input",
@@ -484,14 +495,19 @@ class InputHandler:
             self._current_request_id = None
             try:
                 self._update_surface_state("idle", request_id=request_id)
-            except Exception:
+            except Exception as _exc:
                 import traceback as _tb
-                trace_startup("TRACE1 INPUT _update_surface_state EXCEPTION (idle)")
-                trace_startup(_tb.format_exc())
+                runtime_trace.trace_event(
+                    "surface_state_push_error",
+                    subsystem="input",
+                    severity=runtime_trace.ERROR,
+                    request_id=request_id,
+                    payload={"state": "idle", "error": str(_exc)},
+                )
+                trace_startup("surface_state_push EXCEPTION (idle)\n" + _tb.format_exc())
                 raise
             return
         trace_startup(f"_stop_recording dispatching duration={duration:.3f} bytes={len(audio_bytes)}")
-        trace_startup("TRACE1 INPUT recorder.stop dispatching to pipeline")
         runtime_trace.trace_event(
             "audio_dispatch",
             subsystem="input",
@@ -505,13 +521,24 @@ class InputHandler:
 
     def _dispatch_audio(self, audio_bytes, duration, *, request_id: str | None = None):
         def run_pipeline():
-            trace_startup("TRACE1 INPUT state=thinking (pipeline entry)")
+            runtime_trace.trace_event(
+                "surface_state_push",
+                subsystem="input",
+                request_id=request_id,
+                payload={"state": "thinking", "thread": "pipeline"},
+            )
             try:
                 self._update_surface_state("thinking", request_id=request_id)
-            except Exception:
+            except Exception as _exc:
                 import traceback as _tb
-                trace_startup("TRACE1 INPUT _update_surface_state EXCEPTION (thinking)")
-                trace_startup(_tb.format_exc())
+                runtime_trace.trace_event(
+                    "surface_state_push_error",
+                    subsystem="input",
+                    severity=runtime_trace.ERROR,
+                    request_id=request_id,
+                    payload={"state": "thinking", "error": str(_exc)},
+                )
+                trace_startup("surface_state_push EXCEPTION (thinking)\n" + _tb.format_exc())
                 raise
             if self.on_audio:
                 try:

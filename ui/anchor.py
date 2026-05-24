@@ -124,10 +124,14 @@ class AmbientAnchor(QWidget):
             APRILState.ERROR:     0.030,
         }
         self._phase = (self._phase + speeds.get(state, 0.005)) % 1.0
-        # TRACE7: log repaint only when state changes, not every frame (60fps would flood log)
         if not hasattr(self, "_last_logged_state") or self._last_logged_state != state:
             self._last_logged_state = state
-            runtime_trace.trace_marker(f"[anchor] TRACE7 ANCHOR repaint requested state={state.name}")
+            runtime_trace.trace_event(
+                "anchor_repaint_state",
+                subsystem="ui",
+                severity=runtime_trace.DEBUG,
+                payload={"state": state.name},
+            )
         self.update()
 
     # ------------------------------------------------------------------ painting
@@ -364,7 +368,11 @@ class AmbientAnchor(QWidget):
     # ------------------------------------------------------------------ slots
 
     def _on_state_changed(self, state: APRILState):
-        runtime_trace.trace_marker(f"[anchor] TRACE6 ANCHOR state={state.name}")
+        runtime_trace.trace_event(
+            "anchor_state_changed",
+            subsystem="ui",
+            payload={"state": state.name},
+        )
         self._phase = 0.0
         if state == APRILState.DORMANT:
             self._timer.setInterval(66)

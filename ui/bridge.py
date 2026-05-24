@@ -114,7 +114,6 @@ class APRILBridge(QObject):
         ``request_id`` — Phase 2B REQ-NNNN correlation string, passed through
         to the trace and forwarded via the signal payload.
         """
-        runtime_trace.trace_marker(f"[bridge] TRACE3 BRIDGE emit state={state!r}")
         runtime_trace.trace_event(
             "bridge_set_state",
             subsystem="bridge",
@@ -176,7 +175,6 @@ class APRILBridge(QObject):
         else:
             state_str, request_id = encoded, None
         april_state = _STATE_MAP.get(state_str.lower(), APRILState.DORMANT)
-        runtime_trace.trace_marker(f"[bridge] TRACE4 BRIDGE APPLY state={state_str!r} -> {april_state.name}")
         runtime_trace.trace_event(
             "bridge_apply_state",
             subsystem="bridge",
