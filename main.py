@@ -30,6 +30,18 @@ TRACE_PATH = os.path.join(BASE_DIR, "logs", "startup_trace.log")
 _request_lock = threading.Lock()
 _latest_request_id = 0
 _bridge_ref = None          # APRILBridge | None
+
+
+def _format_request_id(request_id: int) -> str:
+    """Format an integer request counter as a human-readable REQ-NNNN string.
+
+    Phase 2B: canonical request_id format for trace correlation.
+    Human-debuggable; not globally unique across restarts.
+    Example: 1 -> 'REQ-0001'
+    """
+    return f"REQ-{request_id:04d}"
+
+
 _single_instance_handle = None
 _SINGLE_INSTANCE_NAME = "Local\\APRILDesktopSingleton"
 
@@ -107,6 +119,14 @@ def record_state_event(
 
 
 def begin_interruptible_request(source: str) -> int:
+    """Register a new request for interrupt/staleness tracking.
+
+    Returns an integer sequence number used by is_request_current().
+    For the text path, _format_request_id() of this integer IS the canonical
+    request_id string.  For the voice path, the canonical string is generated
+    in input_handler._generate_request_id() at key-press and passed explicitly
+    through on_audio(..., request_id_str).
+    """
     global _latest_request_id
     with _request_lock:
         previous_request_id = _latest_request_id if _latest_request_id > 0 else None
@@ -123,6 +143,12 @@ def begin_interruptible_request(source: str) -> int:
             config=load_config(),
         )
     log_event("request_begin", source=source, request_id=request_id)
+    runtime_trace.trace_event(
+        "request_begin",
+        subsystem="input",
+        request_id=_format_request_id(request_id),
+        payload={"source": source},
+    )
     record_state_event(
         "request_started",
         source=source,
@@ -143,9 +169,18 @@ def is_request_current(request_id: int) -> bool:
         return request_id == _latest_request_id
 
 
-def handle_user_text(text: str, source: str = "text", request_id: int | None = None):
+def handle_user_text(text: str, source: str = "text", request_id: int | None = None, request_id_str: str | None = None):
+    # Derive formatted request_id string if not passed explicitly (e.g. direct callers).
+    if request_id_str is None and request_id is not None:
+        request_id_str = _format_request_id(request_id)
     print(f"[main] user text ({source}): {text}")
     log_event("user_text", source=source, text=text, request_id=request_id)
+    runtime_trace.trace_event(
+        "handle_user_text",
+        subsystem="brain",
+        request_id=request_id_str,
+        payload={"source": source, "text": text[:120]},
+    )
     config = load_config()
     observation = collect_runtime_observation()
     record_state_event(
@@ -158,10 +193,16 @@ def handle_user_text(text: str, source: str = "text", request_id: int | None = N
         config=config,
     )
     if _bridge_ref is not None:
-        _bridge_ref.set_state("thinking")
+        _bridge_ref.set_state("thinking", request_id=request_id_str)
         _bridge_ref.set_task(f"Processing: {text[:60]}")
 
     plan = plan_with_brain(text, config)
+    runtime_trace.trace_event(
+        "intent_planned",
+        subsystem="brain",
+        request_id=request_id_str,
+        payload={"intent": plan.get("intent"), "source": source},
+    )
     log_event(
         "intent_plan",
         source=source,
@@ -280,6 +321,12 @@ def handle_user_text(text: str, source: str = "text", request_id: int | None = N
     if response:
         print(f"[main] assistant response: {response}")
         log_event("assistant_response", source=source, response=response, request_id=request_id)
+        runtime_trace.trace_event(
+            "assistant_response",
+            subsystem="brain",
+            request_id=request_id_str,
+            payload={"source": source, "reply_len": len(response)},
+        )
         append_turn(text, response, source=source)
         record_state_event(
             "assistant_replied",
@@ -290,7 +337,7 @@ def handle_user_text(text: str, source: str = "text", request_id: int | None = N
             config=config,
         )
         if _bridge_ref is not None:
-            _bridge_ref.set_state("speaking")
+            _bridge_ref.set_state("speaking", request_id=request_id_str)
             _bridge_ref.set_transcript(response)
             _bridge_ref.set_task("Speaking")
             _bridge_ref.append_log(f"reply ({source}): {response[:120]}")
@@ -302,7 +349,7 @@ def handle_user_text(text: str, source: str = "text", request_id: int | None = N
         return response
 
     if _bridge_ref is not None:
-        _bridge_ref.set_state("idle")
+        _bridge_ref.set_state("idle", request_id=request_id_str)
         _bridge_ref.set_task("")
 
     if source == "voice":
@@ -319,14 +366,33 @@ def _on_speak_done(response: str) -> None:
 
 def on_text_submit(text: str):
     request_id = begin_interruptible_request("text")
-    return handle_user_text(text, source="text", request_id=request_id)
+    req_id_str = _format_request_id(request_id)
+    runtime_trace.trace_event(
+        "text_submit",
+        subsystem="input",
+        request_id=req_id_str,
+        payload={"text": text[:120]},
+    )
+    return handle_user_text(text, source="text", request_id=request_id, request_id_str=req_id_str)
 
 
-def on_audio_captured(audio_bytes: bytes, duration: float):
+def on_audio_captured(audio_bytes: bytes, duration: float, request_id_str: str | None = None):
+    # begin_interruptible_request handles interrupt/staleness tracking.
+    # The canonical request_id_str comes from input_handler (born at key press);
+    # we do NOT format a second REQ-NNNN from the integer here.
     request_id = begin_interruptible_request("voice")
+    if request_id_str is None:
+        # Defensive fallback: should not occur in normal operation.
+        request_id_str = _format_request_id(request_id)
     size_kb = len(audio_bytes) / 1024
     print(f"[main] audio captured: {duration:.2f}s, {size_kb:.1f} KiB WAV")
     log_event("audio_captured", duration=duration, size_kb=round(size_kb, 1), request_id=request_id)
+    runtime_trace.trace_event(
+        "audio_captured",
+        subsystem="input",
+        request_id=request_id_str,
+        payload={"duration": round(duration, 3), "size_kb": round(size_kb, 1)},
+    )
     config = load_config()
     record_state_event(
         "audio_captured",
@@ -337,13 +403,19 @@ def on_audio_captured(audio_bytes: bytes, duration: float):
         config=config,
     )
     if _bridge_ref is not None:
-        _bridge_ref.set_state("listening")
+        _bridge_ref.set_state("listening", request_id=request_id_str)
         _bridge_ref.set_task("Listening…")
 
     transcript, stt_meta = transcribe_with_metadata(audio_bytes, config)
     if not transcript.strip():
         print("[main] transcription unavailable")
         log_event("transcription_unavailable", request_id=request_id, **stt_meta)
+        runtime_trace.trace_event(
+            "transcript_unavailable",
+            subsystem="input",
+            request_id=request_id_str,
+            payload=stt_meta,
+        )
         record_state_event(
             "transcript_unavailable",
             source="voice",
@@ -353,12 +425,18 @@ def on_audio_captured(audio_bytes: bytes, duration: float):
             config=config,
         )
         if _bridge_ref is not None:
-            _bridge_ref.set_state("idle")
+            _bridge_ref.set_state("idle", request_id=request_id_str)
             _bridge_ref.set_task("")
         return "I captured that, but I couldn't transcribe it."
 
     print(f"[main] transcript: {transcript}")
     log_event("transcript", transcript=transcript, request_id=request_id, **stt_meta)
+    runtime_trace.trace_event(
+        "transcript_received",
+        subsystem="input",
+        request_id=request_id_str,
+        payload={"transcript": transcript[:120]},
+    )
     record_state_event(
         "transcript_received",
         source="voice",
@@ -370,7 +448,7 @@ def on_audio_captured(audio_bytes: bytes, duration: float):
     if _bridge_ref is not None:
         _bridge_ref.set_transcript(transcript)
 
-    return handle_user_text(transcript, source="voice", request_id=request_id)
+    return handle_user_text(transcript, source="voice", request_id=request_id, request_id_str=request_id_str)
 
 
 def acquire_single_instance() -> bool:

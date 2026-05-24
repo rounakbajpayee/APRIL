@@ -94,6 +94,28 @@ def trace_startup(message: str) -> None:
     runtime_trace.trace_marker(f"[input_handler] {message}")
 
 
+_request_counter_lock = threading.Lock()
+_request_counter = 0
+
+
+def _generate_request_id() -> str:
+    """Generate the canonical REQ-NNNN request ID for one user interaction.
+
+    Phase 2B: this is the SINGLE source of request_id generation for voice
+    interactions.  Called exactly once per interaction at the hardware boundary
+    (key press).  The returned string is propagated explicitly through
+    on_audio(..., request_id) to main.py and onwards — main.py does NOT
+    generate a second ID for the same interaction.
+
+    Human-debuggable; resets each process restart by design.
+    Thread-safe via module-level lock.
+    """
+    global _request_counter
+    with _request_counter_lock:
+        _request_counter += 1
+        return f"REQ-{_request_counter:04d}"
+
+
 class AudioUnavailable(RuntimeError):
     pass
 
@@ -272,16 +294,21 @@ class InputHandler:
         self.double_tap_window = float(config.get("copilot_double_tap_window", 0.4))
         self.min_audio_seconds = float(config.get("copilot_min_audio_seconds", 0.5))
         self._lock = threading.Lock()
+        # Phase 2B: request_id for the current in-flight interaction.
+        # Set at key-press (interaction birth); cleared when interaction ends.
+        # Explicit field—no global/contextvar magic.
+        self._current_request_id: str | None = None
 
-    def _update_surface_state(self, state: str, *args, **kwargs) -> None:
+    def _update_surface_state(self, state: str, *args, request_id: str | None = None, **kwargs) -> None:
         """Notify the runtime state sink of a state transition.
 
+        request_id is passed explicitly (Phase 2B) so the sink can correlate
+        the transition to the originating interaction.
         Extra positional/keyword args are accepted and silently dropped so
-        call-sites that pass descriptive text (e.g. _update_surface_state("error",
-        msg)) do not need to be rewritten in this pass.
+        legacy call-sites remain unchanged.
         """
         if self._surface is not None:
-            self._surface.set_state(state)
+            self._surface.set_state(state, request_id=request_id)
 
     def start(self):
         trace_startup(f"InputHandler.start suppress_copilot={bool(self.config.get('suppress_copilot', True))}")
@@ -351,6 +378,15 @@ class InputHandler:
             if self.state != "idle":
                 trace_startup(f"_handle_trigger_press forcing stop from state={self.state}")
                 self._stop_recording(send=False)
+            # Phase 2B: generate request_id at the interaction boundary.
+            self._current_request_id = _generate_request_id()
+            request_id = self._current_request_id
+            runtime_trace.trace_event(
+                "interaction_begin",
+                subsystem="input",
+                request_id=request_id,
+                payload={"trigger": "hotkey"},
+            )
             if self.on_interrupt:
                 try:
                     self.on_interrupt("voice_press")
@@ -361,11 +397,13 @@ class InputHandler:
                 self.recorder.start()
             except AudioUnavailable as exc:
                 self.state = "idle"
+                self._current_request_id = None
                 trace_startup(f"_handle_trigger_press audio unavailable: {exc}")
                 self._update_surface_state("error", str(exc))
                 return
             except Exception as exc:
                 self.state = "idle"
+                self._current_request_id = None
                 trace_startup(f"_handle_trigger_press recorder failure: {exc}")
                 self._update_surface_state("error", f"mic failed: {exc}")
                 return
@@ -374,7 +412,7 @@ class InputHandler:
             trace_startup("TRACE1 INPUT state=listening")
             trace_startup(f"TRACE1 INPUT surface={self._surface!r} surface_type={type(self._surface).__name__}")
             try:
-                self._update_surface_state("listening")
+                self._update_surface_state("listening", request_id=request_id)
             except Exception:
                 import traceback as _tb
                 trace_startup("TRACE1 INPUT _update_surface_state EXCEPTION")
@@ -400,7 +438,7 @@ class InputHandler:
                     self.last_tap_time = None
                     self.state = "continuous_recording"
                     trace_startup("_handle_trigger_release entered continuous recording")
-                    self._update_surface_state("listening")
+                    self._update_surface_state("listening", request_id=self._current_request_id)
                     return
                 self.last_tap_time = now
                 trace_startup(f"_handle_trigger_release tap detected elapsed={elapsed:.3f}")
@@ -413,6 +451,7 @@ class InputHandler:
 
     def _stop_recording(self, send):
         trace_startup(f"_stop_recording send={send} state={self.state}")
+        request_id = self._current_request_id
         audio_bytes, duration = self.recorder.stop()
         self.state = "idle"
         self.f23_down_time = None
@@ -422,8 +461,15 @@ class InputHandler:
                 f"_stop_recording discarded send={send} duration={duration:.3f} bytes={len(audio_bytes)}"
             )
             trace_startup("TRACE1 INPUT state=idle (discarded)")
+            runtime_trace.trace_event(
+                "interaction_discarded",
+                subsystem="input",
+                request_id=request_id,
+                payload={"send": send, "duration": round(duration, 3)},
+            )
+            self._current_request_id = None
             try:
-                self._update_surface_state("idle")
+                self._update_surface_state("idle", request_id=request_id)
             except Exception:
                 import traceback as _tb
                 trace_startup("TRACE1 INPUT _update_surface_state EXCEPTION (idle)")
@@ -432,13 +478,22 @@ class InputHandler:
             return
         trace_startup(f"_stop_recording dispatching duration={duration:.3f} bytes={len(audio_bytes)}")
         trace_startup("TRACE1 INPUT recorder.stop dispatching to pipeline")
-        self._dispatch_audio(audio_bytes, duration)
+        runtime_trace.trace_event(
+            "audio_dispatch",
+            subsystem="input",
+            request_id=request_id,
+            payload={"duration": round(duration, 3), "bytes": len(audio_bytes)},
+        )
+        self._dispatch_audio(audio_bytes, duration, request_id=request_id)
+        # Phase 2B: clear after handing off to pipeline.
+        # The request_id is now owned by on_audio's callee (main.py).
+        self._current_request_id = None
 
-    def _dispatch_audio(self, audio_bytes, duration):
+    def _dispatch_audio(self, audio_bytes, duration, *, request_id: str | None = None):
         def run_pipeline():
             trace_startup("TRACE1 INPUT state=thinking (pipeline entry)")
             try:
-                self._update_surface_state("thinking")
+                self._update_surface_state("thinking", request_id=request_id)
             except Exception:
                 import traceback as _tb
                 trace_startup("TRACE1 INPUT _update_surface_state EXCEPTION (thinking)")
@@ -446,17 +501,19 @@ class InputHandler:
                 raise
             if self.on_audio:
                 try:
-                    self.on_audio(audio_bytes, duration)
+                    # Phase 2B: pass request_id explicitly so main.py uses
+                    # the single canonical ID born at the hardware boundary.
+                    self.on_audio(audio_bytes, duration, request_id)
                 except Exception as exc:
-                    self._update_surface_state("error", f"audio pipeline failed: {exc}")
+                    self._update_surface_state("error", f"audio pipeline failed: {exc}", request_id=request_id)
                     return
                 # on_audio drives the rest of the state machine (thinking →
                 # speaking → idle) internally via the bridge.  Do not set
                 # idle here — that would race with the TTS on_done callback.
             else:
-                self._update_surface_state("speaking")
+                self._update_surface_state("speaking", request_id=request_id)
                 time.sleep(1.2)
-                self._update_surface_state("idle")
+                self._update_surface_state("idle", request_id=request_id)
 
         threading.Thread(target=run_pipeline, daemon=True).start()
 

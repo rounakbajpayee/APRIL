@@ -105,15 +105,34 @@ class APRILBridge(QObject):
 
     # ── public API (thread-safe) ────────────────────────────────────────────
 
-    def set_state(self, state: str) -> None:
+    def set_state(self, state: str, request_id: str | None = None) -> None:
         """
         Notify the bridge of a runtime state change.
 
         ``state`` is the runtime string — "idle", "listening", "thinking",
         "speaking", "error", etc.  Call from any thread.
+        ``request_id`` — Phase 2B REQ-NNNN correlation string, passed through
+        to the trace and forwarded via the signal payload.
         """
         runtime_trace.trace_marker(f"[bridge] TRACE3 BRIDGE emit state={state!r}")
-        self._state_sig.emit(state)
+        runtime_trace.trace_event(
+            "bridge_set_state",
+            subsystem="bridge",
+            request_id=request_id,
+            payload={"state": state},
+        )
+        # Transport note: pyqtSignal(str) carries a single string across the
+        # thread boundary.  We encode request_id into the payload as
+        # "state\x00REQ-NNNN" using a null-byte separator rather than adding
+        # a second signal parameter.  This avoids widening the signal contract
+        # and keeps the existing QueuedConnection wiring unchanged.
+        # _apply_state unpacks the separator.  The null byte (\x00) cannot
+        # appear in either field: state strings are short ASCII labels and
+        # REQ-NNNN is also ASCII.
+        # This is a transport encoding hack, not a semantic model.  A future
+        # phase may introduce a dedicated typed signal if the contract grows.
+        encoded = f"{state}\x00{request_id}" if request_id is not None else state
+        self._state_sig.emit(encoded)
 
     def set_transcript(self, text: str) -> None:
         """
@@ -150,11 +169,21 @@ class APRILBridge(QObject):
 
     # ── private slots (main-thread only) ───────────────────────────────────
 
-    def _apply_state(self, state_str: str) -> None:
+    def _apply_state(self, encoded: str) -> None:
+        # Unpack optional request_id encoded as "state\x00REQ-NNNN".
+        if "\x00" in encoded:
+            state_str, request_id = encoded.split("\x00", 1)
+        else:
+            state_str, request_id = encoded, None
         april_state = _STATE_MAP.get(state_str.lower(), APRILState.DORMANT)
-        # Trace to startup log so we can confirm signal delivery from background threads
         runtime_trace.trace_marker(f"[bridge] TRACE4 BRIDGE APPLY state={state_str!r} -> {april_state.name}")
-        self._core.set_state(april_state)
+        runtime_trace.trace_event(
+            "bridge_apply_state",
+            subsystem="bridge",
+            request_id=request_id,
+            payload={"state": state_str, "april_state": april_state.name},
+        )
+        self._core.set_state(april_state, request_id=request_id)
 
     def _apply_transcript(self, text: str) -> None:
         if self._overlay is not None:

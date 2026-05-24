@@ -62,9 +62,15 @@ class APRILCore(QObject):
     def state(self) -> APRILState:
         return self._state
 
-    def set_state(self, s: APRILState) -> None:
+    def set_state(self, s: APRILState, request_id: str | None = None) -> None:
         if self._state != s:
             runtime_trace.trace_marker(f"[state] TRACE5 CORE old={self._state.name} new={s.name}")
+            runtime_trace.trace_event(
+                "core_state_transition",
+                subsystem="state",
+                request_id=request_id,
+                payload={"old": self._state.name, "new": s.name},
+            )
             self._state = s
             self.state_changed.emit(s)
         else:

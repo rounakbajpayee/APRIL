@@ -24,11 +24,12 @@ class RuntimeStateSink(Protocol):
     whether main.py should own that call instead.
     """
 
-    def set_state(self, state: str) -> None:
+    def set_state(self, state: str, request_id: str | None = None) -> None:
         """
         Notify the surface of a runtime state transition.
 
         state: one of "idle" | "listening" | "thinking" | "speaking" | "error"
+        request_id: Phase 2B — optional REQ-NNNN correlation string.
         Thread-safe; may be called from any background thread.
         """
         ...
