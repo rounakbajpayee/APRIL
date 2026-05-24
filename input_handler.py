@@ -399,12 +399,26 @@ class InputHandler:
                 self.state = "idle"
                 self._current_request_id = None
                 trace_startup(f"_handle_trigger_press audio unavailable: {exc}")
+                runtime_trace.trace_event(
+                    "audio_unavailable",
+                    subsystem="input",
+                    severity=runtime_trace.WARNING,
+                    request_id=request_id,
+                    payload={"error": str(exc)},
+                )
                 self._update_surface_state("error", str(exc))
                 return
             except Exception as exc:
                 self.state = "idle"
                 self._current_request_id = None
                 trace_startup(f"_handle_trigger_press recorder failure: {exc}")
+                runtime_trace.trace_event(
+                    "recorder_failure",
+                    subsystem="input",
+                    severity=runtime_trace.ERROR,
+                    request_id=request_id,
+                    payload={"error": str(exc)},
+                )
                 self._update_surface_state("error", f"mic failed: {exc}")
                 return
             self.state = "recording_hold"
@@ -506,6 +520,13 @@ class InputHandler:
                     self.on_audio(audio_bytes, duration, request_id)
                 except Exception as exc:
                     self._update_surface_state("error", f"audio pipeline failed: {exc}", request_id=request_id)
+                    runtime_trace.trace_event(
+                        "audio_pipeline_error",
+                        subsystem="input",
+                        severity=runtime_trace.ERROR,
+                        request_id=request_id,
+                        payload={"error": str(exc)},
+                    )
                     return
                 # on_audio drives the rest of the state machine (thinking →
                 # speaking → idle) internally via the bridge.  Do not set

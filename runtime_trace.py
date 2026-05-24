@@ -62,6 +62,15 @@ PHASE 2C CHANGES
 - Correlation shape: request_id = interaction identity; job_id = async subtask identity.
 - job_id generation is the caller's responsibility (e.g. main.py _format_job_id),
   symmetric with request_id generation in input_handler.py and main.py.
+
+PHASE 6D CHANGES
+
+- trace_event() extended with explicit severity parameter; default remains "INFO".
+- Canonical severity levels exposed as module constants: DEBUG, INFO, WARNING, ERROR, CRITICAL.
+- High-signal call sites upgraded: failures, transcript failures, runtime exceptions,
+  warning states, audio pipeline errors.
+- No mass-edit of neutral INFO call sites; signal-to-noise ratio preserved.
+- RuntimeEvent.severity field was already present; no schema change required.
 """
 
 from __future__ import annotations
@@ -74,6 +83,16 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+# ---------------------------------------------------------------------------
+# Severity level constants
+# ---------------------------------------------------------------------------
+
+DEBUG    = "DEBUG"
+INFO     = "INFO"
+WARNING  = "WARNING"
+ERROR    = "ERROR"
+CRITICAL = "CRITICAL"
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -347,6 +366,7 @@ def trace_event(
     event: str,
     *,
     subsystem: str,
+    severity: str = INFO,
     request_id: str | None = None,
     job_id: str | None = None,
     payload: dict[str, Any] | None = None,
@@ -360,11 +380,14 @@ def trace_event(
     Arguments:
         event      — event name string (e.g. "state_transition")
         subsystem  — source subsystem label (e.g. "bridge", "input")
+        severity   — one of DEBUG | INFO | WARNING | ERROR | CRITICAL (Phase 6D)
+                     defaults to INFO for full backward compatibility
         request_id — optional interaction-level correlation ID (Phase 2B)
         job_id     — optional async subtask correlation ID (Phase 2C)
         payload    — optional dict of additional fields
 
-    Caller API is backward-compatible: job_id is a new optional keyword arg.
+    Caller API is backward-compatible: severity and job_id are new optional
+    keyword args.  Existing call sites without severity continue to emit INFO.
     RuntimeEvent is internal.
 
     This function:
@@ -376,7 +399,7 @@ def trace_event(
         ev = RuntimeEvent(
             timestamp=datetime.now(timezone.utc).isoformat(),
             subsystem=str(subsystem),
-            severity="INFO",
+            severity=str(severity) if severity else INFO,
             event=str(event),
             request_id=str(request_id) if request_id is not None else None,
             job_id=str(job_id) if job_id is not None else None,

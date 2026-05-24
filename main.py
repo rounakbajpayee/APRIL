@@ -463,6 +463,7 @@ def on_audio_captured(audio_bytes: bytes, duration: float, request_id_str: str |
         runtime_trace.trace_event(
             "transcript_unavailable",
             subsystem="stt",
+            severity=runtime_trace.WARNING,
             request_id=request_id_str,
             job_id=stt_job_id,
             payload=stt_meta,
