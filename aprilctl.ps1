@@ -30,25 +30,13 @@ function Start-April {
         return
     }
 
-    # Always use python.exe, never pythonw.exe.
-    # pythonw.exe launches with no foreground rights, which causes DWM to
-    # silently suppress Tool windows (e.g. the new surface system orb).
-    # The console window is hidden below via Win32 ShowWindow instead.
-    if (-not (Test-Path $Python)) {
-        throw "Could not find python.exe in .venv\Scripts"
+    $launcher = if (Test-Path $Pythonw) { $Pythonw } else { $Python }
+    if (-not (Test-Path $launcher)) {
+        throw "Could not find a Python launcher in .venv\Scripts"
     }
 
     $startArgs = '"' + $MainScript + '"'
-    $proc = Start-Process -FilePath $Python -WorkingDirectory $RepoRoot -ArgumentList $startArgs -WindowStyle Normal -PassThru
-
-    # Hide the console window immediately after launch so it does not flash.
-    Start-Sleep -Milliseconds 300
-    if (-not $proc.HasExited) {
-        $sig = '[DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);'
-        $type = Add-Type -MemberDefinition $sig -Name WinAPI -Namespace Hide -PassThru
-        $hwnd = (Get-Process -Id $proc.Id).MainWindowHandle
-        if ($hwnd -ne [IntPtr]::Zero) { $type::ShowWindow($hwnd, 0) | Out-Null }
-    }
+    $proc = Start-Process -FilePath $launcher -WorkingDirectory $RepoRoot -ArgumentList $startArgs -WindowStyle Hidden -PassThru
     Start-Sleep -Milliseconds 1200
     if ($proc.HasExited) {
         Write-Host "APRIL failed to start (exit code $($proc.ExitCode))."
