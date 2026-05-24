@@ -54,6 +54,14 @@ PHASE 2A CHANGES
 - No caller changes required.
 - thread_name field captured automatically; job_id reserved (None).
 - request_id and job_id fields present on schema; propagation deferred to Phase 2B/2C.
+
+PHASE 2C CHANGES
+
+- trace_event() extended with optional job_id parameter.
+- job_id is explicit: callers generate and pass it; no hidden propagation.
+- Correlation shape: request_id = interaction identity; job_id = async subtask identity.
+- job_id generation is the caller's responsibility (e.g. main.py _format_job_id),
+  symmetric with request_id generation in input_handler.py and main.py.
 """
 
 from __future__ import annotations
@@ -340,6 +348,7 @@ def trace_event(
     *,
     subsystem: str,
     request_id: str | None = None,
+    job_id: str | None = None,
     payload: dict[str, Any] | None = None,
 ) -> None:
     """
@@ -351,10 +360,12 @@ def trace_event(
     Arguments:
         event      — event name string (e.g. "state_transition")
         subsystem  — source subsystem label (e.g. "bridge", "input")
-        request_id — optional correlation ID
+        request_id — optional interaction-level correlation ID (Phase 2B)
+        job_id     — optional async subtask correlation ID (Phase 2C)
         payload    — optional dict of additional fields
 
-    Caller API is unchanged from Phase 1.  RuntimeEvent is internal.
+    Caller API is backward-compatible: job_id is a new optional keyword arg.
+    RuntimeEvent is internal.
 
     This function:
         - is thread-safe
@@ -368,7 +379,7 @@ def trace_event(
             severity="INFO",
             event=str(event),
             request_id=str(request_id) if request_id is not None else None,
-            job_id=None,  # Phase 2C
+            job_id=str(job_id) if job_id is not None else None,
             payload=payload if payload else None,
             thread_name=threading.current_thread().name,
         )

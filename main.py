@@ -42,6 +42,24 @@ def _format_request_id(request_id: int) -> str:
     return f"REQ-{request_id:04d}"
 
 
+_job_id_lock = threading.Lock()
+_job_id_counter = 0
+
+
+def _format_job_id(subsystem: str) -> str:
+    """Generate a human-readable job_id for one async pipeline subtask.
+
+    Phase 2C: explicit job_id generation at each async boundary.
+    Symmetric with _format_request_id — same owner (main.py), same lifetime.
+    Format: SUBSYSTEM-NNNN  e.g. 'STT-0001', 'BRAIN-0001', 'TTS-0001'
+    Thread-safe; resets on process restart by design.
+    """
+    global _job_id_counter
+    with _job_id_lock:
+        _job_id_counter += 1
+        return f"{subsystem.upper()}-{_job_id_counter:04d}"
+
+
 _single_instance_handle = None
 _SINGLE_INSTANCE_NAME = "Local\\APRILDesktopSingleton"
 
@@ -196,11 +214,20 @@ def handle_user_text(text: str, source: str = "text", request_id: int | None = N
         _bridge_ref.set_state("thinking", request_id=request_id_str)
         _bridge_ref.set_task(f"Processing: {text[:60]}")
 
+    brain_job_id = _format_job_id("BRAIN")
+    runtime_trace.trace_event(
+        "brain_begin",
+        subsystem="brain",
+        request_id=request_id_str,
+        job_id=brain_job_id,
+        payload={"source": source, "text_len": len(text)},
+    )
     plan = plan_with_brain(text, config)
     runtime_trace.trace_event(
         "intent_planned",
         subsystem="brain",
         request_id=request_id_str,
+        job_id=brain_job_id,
         payload={"intent": plan.get("intent"), "source": source},
     )
     log_event(
@@ -325,6 +352,7 @@ def handle_user_text(text: str, source: str = "text", request_id: int | None = N
             "assistant_response",
             subsystem="brain",
             request_id=request_id_str,
+            job_id=brain_job_id,
             payload={"source": source, "reply_len": len(response)},
         )
         append_turn(text, response, source=source)
@@ -336,6 +364,14 @@ def handle_user_text(text: str, source: str = "text", request_id: int | None = N
             payload={"source": source, "request_id": request_id, "response": response},
             config=config,
         )
+        tts_job_id = _format_job_id("TTS")
+        runtime_trace.trace_event(
+            "tts_begin",
+            subsystem="tts",
+            request_id=request_id_str,
+            job_id=tts_job_id,
+            payload={"source": source, "reply_len": len(response)},
+        )
         if _bridge_ref is not None:
             _bridge_ref.set_state("speaking", request_id=request_id_str)
             _bridge_ref.set_transcript(response)
@@ -344,7 +380,7 @@ def handle_user_text(text: str, source: str = "text", request_id: int | None = N
         speak_reply(
             response,
             config,
-            on_done=lambda _ok: _on_speak_done(response),
+            on_done=lambda _ok: _on_speak_done(response, request_id_str, tts_job_id),
         )
         return response
 
@@ -357,8 +393,14 @@ def handle_user_text(text: str, source: str = "text", request_id: int | None = N
     return "I heard you, but I do not have a reply yet."
 
 
-def _on_speak_done(response: str) -> None:
+def _on_speak_done(response: str, request_id_str: str | None = None, tts_job_id: str | None = None) -> None:
     """TTS completion handler — drives the bridge back to idle."""
+    runtime_trace.trace_event(
+        "tts_done",
+        subsystem="tts",
+        request_id=request_id_str,
+        job_id=tts_job_id,
+    )
     if _bridge_ref is not None:
         _bridge_ref.set_state("idle")
         _bridge_ref.set_task("")
@@ -406,14 +448,23 @@ def on_audio_captured(audio_bytes: bytes, duration: float, request_id_str: str |
         _bridge_ref.set_state("listening", request_id=request_id_str)
         _bridge_ref.set_task("Listening…")
 
+    stt_job_id = _format_job_id("STT")
+    runtime_trace.trace_event(
+        "stt_begin",
+        subsystem="stt",
+        request_id=request_id_str,
+        job_id=stt_job_id,
+        payload={"duration": round(duration, 3)},
+    )
     transcript, stt_meta = transcribe_with_metadata(audio_bytes, config)
     if not transcript.strip():
         print("[main] transcription unavailable")
         log_event("transcription_unavailable", request_id=request_id, **stt_meta)
         runtime_trace.trace_event(
             "transcript_unavailable",
-            subsystem="input",
+            subsystem="stt",
             request_id=request_id_str,
+            job_id=stt_job_id,
             payload=stt_meta,
         )
         record_state_event(
@@ -433,8 +484,9 @@ def on_audio_captured(audio_bytes: bytes, duration: float, request_id_str: str |
     log_event("transcript", transcript=transcript, request_id=request_id, **stt_meta)
     runtime_trace.trace_event(
         "transcript_received",
-        subsystem="input",
+        subsystem="stt",
         request_id=request_id_str,
+        job_id=stt_job_id,
         payload={"transcript": transcript[:120]},
     )
     record_state_event(
