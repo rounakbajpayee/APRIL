@@ -2,7 +2,7 @@
 runtime_trace.py — Canonical runtime trace infrastructure for APRIL.
 
 Phase 1 — Commit A: additive infrastructure only.
-No call-site migration in this commit.
+Phase 2A — RuntimeEvent canonical schema introduced.
 
 Architecture:
     caller thread
@@ -16,6 +16,10 @@ Public API:
     shutdown(timeout=3.0)
     flush(timeout=3.0)
 
+RuntimeEvent (Phase 2A):
+    Canonical internal schema for all structured trace events.
+    Internal to this module; callers continue using trace_event() unchanged.
+
 Design invariants:
     - Never raises into caller under any circumstances.
     - Never blocks caller thread on disk I/O.
@@ -25,11 +29,11 @@ Design invariants:
     - Trace failure is isolated: runtime behavior is unaffected.
 
 
-TRANSITIONAL PHASE 1 NOTES
+TRANSITIONAL PHASE 1/2A NOTES
 
 - startup_trace.log intentionally contains both:
-  - human-readable TRACE lines
-  - structured JSON trace_event lines
+  - human-readable TRACE lines (trace_marker)
+  - structured JSON trace_event lines (trace_event → RuntimeEvent)
 
 - This mixed-format output is transitional and intentional.
 
@@ -37,10 +41,19 @@ TRANSITIONAL PHASE 1 NOTES
   - human-readable causal traces
   - machine-readable structured event streams
 
-- Phase 1 prioritizes:
+- Phase 1/2A prioritizes:
   - deterministic migration
   - preservation of existing TRACE workflows
   - minimal runtime semantic change
+
+PHASE 2A CHANGES
+
+- RuntimeEvent dataclass introduced as canonical internal schema.
+- trace_event() now normalizes to RuntimeEvent before serialization.
+- Serialization output is semantically identical to Phase 1.
+- No caller changes required.
+- thread_name field captured automatically; job_id reserved (None).
+- request_id and job_id fields present on schema; propagation deferred to Phase 2B/2C.
 """
 
 from __future__ import annotations
@@ -49,6 +62,7 @@ import json
 import queue
 import sys
 import threading
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -66,6 +80,79 @@ _SENTINEL = object()
 
 # Drain timeout used by flush() and shutdown() if the caller doesn't specify.
 _DEFAULT_DRAIN_TIMEOUT = 3.0  # seconds
+
+
+# ---------------------------------------------------------------------------
+# Phase 2A — Canonical RuntimeEvent schema
+# ---------------------------------------------------------------------------
+
+@dataclass(slots=True)
+class RuntimeEvent:
+    """
+    Canonical runtime event schema for APRIL observability.
+
+    Phase 2A: schema definition only.
+    Phase 2B: request_id propagation.
+    Phase 2C: job_id propagation.
+
+    Fields
+    ------
+    timestamp   : ISO-UTC timestamp — causal ordering.
+    subsystem   : source subsystem label — ownership boundary.
+    severity    : one of DEBUG | INFO | WARNING | ERROR | CRITICAL.
+    event       : concise event identity string.
+    request_id  : optional — request lifecycle correlation (Phase 2B).
+    job_id      : optional — async/subtask correlation (Phase 2C).
+    payload     : optional — compact structured event details.
+    thread_name : optional — thread boundary visibility.
+
+    Canonical subsystem values:
+        input | bridge | state | ui | brain | tts | stt | runtime | observability
+
+    Canonical severity values:
+        DEBUG | INFO | WARNING | ERROR | CRITICAL
+
+    Design constraints:
+        - Immutable after construction (slots=True, no post-init mutation).
+        - Compact JSON serialization via _serialize().
+        - No inheritance. No event bus. No magic.
+    """
+    timestamp:   str
+    subsystem:   str
+    severity:    str
+    event:       str
+    request_id:  str | None = None
+    job_id:      str | None = None
+    payload:     dict[str, Any] | None = None
+    thread_name: str | None = None
+
+    def _serialize(self) -> str:
+        """
+        Serialize to a compact JSON line suitable for append-only log output.
+
+        Output fields:
+            ts, type, subsystem, severity, event
+            + conditionally: request_id, job_id, thread_name, payload
+
+        Omits None fields to keep lines compact and human-inspectable.
+        Field order is stable and deterministic.
+        """
+        record: dict[str, Any] = {
+            "ts":        self.timestamp,
+            "type":      "trace_event",
+            "subsystem": self.subsystem,
+            "severity":  self.severity,
+            "event":     self.event,
+        }
+        if self.request_id is not None:
+            record["request_id"] = self.request_id
+        if self.job_id is not None:
+            record["job_id"] = self.job_id
+        if self.thread_name is not None:
+            record["thread_name"] = self.thread_name
+        if self.payload:
+            record["payload"] = self.payload
+        return json.dumps(record, ensure_ascii=False)
 
 
 # ---------------------------------------------------------------------------
@@ -258,8 +345,8 @@ def trace_event(
     """
     Emit a structured trace event to the trace log.
 
-    Serialized as a single JSON line.  Future-compatible; lightly used
-    in Phase 1.
+    Internally normalized to RuntimeEvent before serialization.
+    Serialized as a single JSON line.
 
     Arguments:
         event      — event name string (e.g. "state_transition")
@@ -267,24 +354,25 @@ def trace_event(
         request_id — optional correlation ID
         payload    — optional dict of additional fields
 
+    Caller API is unchanged from Phase 1.  RuntimeEvent is internal.
+
     This function:
         - is thread-safe
         - never raises
         - never blocks on disk I/O
     """
     try:
-        record: dict[str, Any] = {
-            "ts": datetime.now(timezone.utc).isoformat(),
-            "type": "trace_event",
-            "event": str(event),
-            "subsystem": str(subsystem),
-        }
-        if request_id is not None:
-            record["request_id"] = str(request_id)
-        if payload:
-            record["payload"] = payload
-        line = json.dumps(record, ensure_ascii=False)
-        _writer.put(line)
+        ev = RuntimeEvent(
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            subsystem=str(subsystem),
+            severity="INFO",
+            event=str(event),
+            request_id=str(request_id) if request_id is not None else None,
+            job_id=None,  # Phase 2C
+            payload=payload if payload else None,
+            thread_name=threading.current_thread().name,
+        )
+        _writer.put(ev._serialize())
     except Exception:
         pass
 
