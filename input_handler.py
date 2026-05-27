@@ -210,13 +210,63 @@ class AudioRecorder:
     def _to_wav(self, frames):
         if not frames:
             return b""
+        
+        raw_audio = b"".join(frames)
+        
+        # Jugaad 3: Mute the mechanical clicks without cutting audio length
+        # Slicing the audio chopped off syllables. 
+        # Now, we simply zero-out the first and last 150ms to silence the hardware Copilot key clicks!
+        mute_sec = 0.15
+        mute_bytes = int(mute_sec * self.sample_rate) * SAMPLE_WIDTH_BYTES
+        
+        if len(raw_audio) > 2 * mute_bytes:
+            audio_array = bytearray(raw_audio)
+            
+            # 1. Mute the head (key down clack) and tail (key up clack)
+            audio_array[:mute_bytes] = b'\x00' * mute_bytes
+            audio_array[-mute_bytes:] = b'\x00' * mute_bytes
+            
+            # 2. Measure the peak volume ONLY on the inner (spoken) audio 
+            # so the hardware click doesn't trick the AGC into thinking the audio is already loud.
+            inner_audio = bytes(audio_array[mute_bytes:-mute_bytes])
+            
+            try:
+                import audioop
+                peak = audioop.max(inner_audio, SAMPLE_WIDTH_BYTES)
+                if peak > 0:
+                    target = 24000
+                    multiplier = target / peak
+                    if multiplier > 1.2:
+                        multiplier = min(multiplier, 15.0)
+                        # Apply boost to the entire buffer (the 0s stay 0s)
+                        raw_audio = audioop.mul(bytes(audio_array), SAMPLE_WIDTH_BYTES, multiplier)
+                    else:
+                        raw_audio = bytes(audio_array)
+                else:
+                    raw_audio = bytes(audio_array)
+            except Exception:
+                raw_audio = bytes(audio_array)
+
         buffer = io.BytesIO()
         with wave.open(buffer, "wb") as wav:
             wav.setnchannels(self.channels)
             wav.setsampwidth(SAMPLE_WIDTH_BYTES)
             wav.setframerate(self.sample_rate)
-            wav.writeframes(b"".join(frames))
-        return buffer.getvalue()
+            wav.writeframes(raw_audio)
+            
+        wav_bytes = buffer.getvalue()
+        
+        # --- DEBUG SINK ---
+        # Save the exact audio buffer to disk so the user can verify if the OS is mangling it.
+        try:
+            import os
+            debug_path = os.path.join(os.path.dirname(__file__), "debug_last_capture.wav")
+            with open(debug_path, "wb") as f:
+                f.write(wav_bytes)
+        except Exception:
+            pass
+            
+        return wav_bytes
 
 
 class NativeCopilotHook:
