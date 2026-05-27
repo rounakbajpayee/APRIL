@@ -84,6 +84,13 @@ user32.PostThreadMessageW.argtypes = [
     ctypes.wintypes.LPARAM,
 ]
 user32.PostThreadMessageW.restype = ctypes.wintypes.BOOL
+user32.keybd_event.argtypes = [
+    ctypes.c_byte,
+    ctypes.c_byte,
+    ctypes.wintypes.DWORD,
+    ctypes.c_void_p,
+]
+user32.keybd_event.restype = None
 kernel32.GetModuleHandleW.argtypes = [ctypes.wintypes.LPCWSTR]
 kernel32.GetModuleHandleW.restype = ctypes.wintypes.HMODULE
 kernel32.GetCurrentThreadId.argtypes = []
@@ -264,6 +271,11 @@ class NativeCopilotHook:
                 if event.flags & LLKHF_INJECTED:
                     return 1  # suppress but do not dispatch
                 if w_param in (WM_KEYDOWN, WM_SYSKEYDOWN):
+                    # Send F24 keydown/keyup to break the Ctrl+Alt+Shift+Win (Office key) combination
+                    # so that Windows does not open Microsoft 365 / Copilot 365 on key release.
+                    # 0x87 is VK_F24, 2 is KEYEVENTF_KEYUP.
+                    user32.keybd_event(0x87, 0, 0, None)
+                    user32.keybd_event(0x87, 0, 2, None)
                     threading.Thread(target=self.handler._handle_trigger_press, daemon=True).start()
                 elif w_param in (WM_KEYUP, WM_SYSKEYUP):
                     threading.Thread(target=self.handler._handle_trigger_release, daemon=True).start()
