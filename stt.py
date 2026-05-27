@@ -30,24 +30,6 @@ def transcribe(audio_bytes: bytes, config: dict[str, Any]) -> str:
     return transcript
 
 
-def _calculate_rms(audio_bytes: bytes) -> float:
-    import struct
-    import math
-    if not audio_bytes:
-        return 0.0
-    try:
-        raw_samples = audio_bytes[44:] if len(audio_bytes) > 44 else audio_bytes
-        sample_count = len(raw_samples) // 2
-        if sample_count == 0:
-            return 0.0
-        shorts = struct.unpack(f"{sample_count}h", raw_samples)
-        mean = sum(shorts) / sample_count
-        sum_squares = sum((s - mean) ** 2 for s in shorts)
-        return math.sqrt(sum_squares / sample_count)
-    except Exception:
-        return 0.0
-
-
 def transcribe_with_metadata(audio_bytes: bytes, config: dict[str, Any]) -> tuple[str, dict[str, str]]:
     """
     Convert WAV audio bytes into text.
@@ -56,12 +38,6 @@ def transcribe_with_metadata(audio_bytes: bytes, config: dict[str, Any]) -> tupl
     """
     if not audio_bytes:
         return "", {}
-
-    # Silence filtering
-    silence_threshold = float(config.get("stt_silence_threshold", 150.0))
-    rms = _calculate_rms(audio_bytes)
-    if rms < silence_threshold:
-        return "", {"stt_source": "silence_filter", "rms": f"{rms:.1f}"}
 
     prefer_local = str(config.get("stt_mode", "remote_first") or "remote_first").strip().lower() != "remote_first"
     whisper_host = str(config.get("whisper_host", "") or "").strip()

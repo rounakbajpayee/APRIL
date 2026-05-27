@@ -597,40 +597,7 @@ class AprilStressTests(unittest.TestCase):
 
         self.assertIn(handler.state, ["idle", "recording_hold", "continuous_recording"])
 
-    def test_stt_silence_filtering(self):
-        from stt import _calculate_rms, transcribe_with_metadata
-        # 1. Test RMS calculation on empty audio
-        self.assertEqual(_calculate_rms(b""), 0.0)
 
-        # 2. Test silence threshold triggers
-        # Generate 1.0 seconds of silent 16kHz 16-bit PCM audio (zeros)
-        silent_audio = b"\x00" * 32000
-        # Include a fake WAV header (44 bytes of zeros is fine for the mock/calculation test)
-        silent_audio_with_header = b"\x00" * 44 + silent_audio
-
-        rms = _calculate_rms(silent_audio_with_header)
-        self.assertEqual(rms, 0.0)
-
-        # Test silence filter returns empty transcript
-        config = {"stt_silence_threshold": 350.0}
-        text, meta = transcribe_with_metadata(silent_audio_with_header, config)
-        self.assertEqual(text, "")
-        self.assertEqual(meta["stt_source"], "silence_filter")
-
-        # 3. Test non-silent audio RMS
-        # Create a basic square wave (high amplitude values) to get high RMS
-        # 16-bit PCM: alternate 5000 and -5000
-        import struct
-        samples = []
-        for i in range(1000):
-            val = 5000 if (i % 2 == 0) else -5000
-            samples.append(val)
-        square_wave = struct.pack(f"{len(samples)}h", *samples)
-        square_wave_with_header = b"\x00" * 44 + square_wave
-        
-        rms_val = _calculate_rms(square_wave_with_header)
-        self.assertAlmostEqual(rms_val, 5000.0, delta=1.0)
-        self.assertGreater(rms_val, 350.0)
 
     def test_post_process_dictation_with_phonetics(self):
         from main import _post_process_dictation
