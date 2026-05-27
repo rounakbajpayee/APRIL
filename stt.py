@@ -58,7 +58,7 @@ def transcribe_with_metadata(audio_bytes: bytes, config: dict[str, Any]) -> tupl
         return "", {}
 
     # Silence filtering
-    silence_threshold = float(config.get("stt_silence_threshold", 350.0))
+    silence_threshold = float(config.get("stt_silence_threshold", 150.0))
     rms = _calculate_rms(audio_bytes)
     if rms < silence_threshold:
         return "", {"stt_source": "silence_filter", "rms": f"{rms:.1f}"}

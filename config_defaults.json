@@ -44,6 +44,7 @@
   "copilot_double_tap_window": 0.4,
   "copilot_min_audio_seconds": 0.5,
   "suppress_copilot": true,
+  "stt_silence_threshold": 150.0,
   "widget_anchor_x": null,
   "widget_anchor_y": null,
   "widget_anchor_bottom_y": null
