@@ -18,6 +18,7 @@ from typing import Any
 from debug_log import latest_event_value, summarize_recent_activity
 from learning import apply_rewrites
 from memory import summarize_recent
+import semantic_store
 from state_engine import get_prompt_context_summary, load_snapshot
 
 
@@ -79,7 +80,7 @@ def process(text: str, config: dict[str, Any]) -> dict[str, Any]:
             },
         }
 
-    local_plan = _local_plan(clean)
+    local_plan = _local_plan(clean, config)
     if local_plan:
         return local_plan
 
@@ -258,7 +259,7 @@ def _local_reply(text: str, config: dict[str, Any]) -> str:
     return ""
 
 
-def _local_plan(text: str) -> dict[str, Any] | None:
+def _local_plan(text: str, config: dict[str, Any]) -> dict[str, Any] | None:
     from intent import registry as intent_registry
 
     lowered = text.lower()
@@ -281,6 +282,12 @@ def _local_plan(text: str) -> dict[str, Any] | None:
     learned_plan = intent_registry.semantic_plan(text)
     if learned_plan:
         return learned_plan
+
+    # Dynamic semantic routing layer (checks past confirmed examples/history)
+    threshold = float(config.get("semantic_routing_threshold", 0.74))
+    dynamic_plan = semantic_store.semantic_plan(text, confidence_threshold=threshold)
+    if dynamic_plan:
+        return dynamic_plan
 
     return None
 

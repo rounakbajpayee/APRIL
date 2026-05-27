@@ -482,6 +482,26 @@ class AprilStressTests(unittest.TestCase):
         self.assertEqual(plan["action"].get("mode"), "open_url")
         self.assertIn("youtube", str(plan["action"].get("url", "")).lower())
 
+    def test_dynamic_semantic_routing_via_brain(self):
+        semantic_store.record_semantic_example(
+            kind="turn",
+            text="start local database backup",
+            source="text",
+            resolved_intent="shell",
+            response="Starting dynamic DB backup.",
+            action={"mode": "command", "node": "local", "command": "backup_db.bat"},
+            outcome="success",
+            subject_type="utterance",
+            subject_ref="42",
+            confidence=1.0,
+        )
+        self.config["semantic_routing_threshold"] = 0.50
+        plan = brain.process("please start the local database backup script", self.config)
+        self.assertEqual(plan["intent"], "shell")
+        self.assertEqual(plan["action"].get("mode"), "command")
+        self.assertEqual(plan["action"].get("command"), "backup_db.bat")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
