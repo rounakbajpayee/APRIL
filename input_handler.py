@@ -366,67 +366,94 @@ class InputHandler:
 
     def _handle_trigger_press(self):
         trace_startup(f"_handle_trigger_press entry state={self.state} trigger_down={self.trigger_down}")
+        
+        stop_needed = False
+        stop_send = False
+        
         with self._lock:
             if self.trigger_down:
                 trace_startup("_handle_trigger_press ignored because trigger already down")
                 return
             self.trigger_down = True
+            
             if self.state == "continuous_recording":
                 self.trigger_down = False
                 trace_startup("_handle_trigger_press ending continuous recording")
-                self._stop_recording(send=True)
-                return
-            if self.state != "idle":
+                stop_needed = True
+                stop_send = True
+            elif self.state != "idle":
                 trace_startup(f"_handle_trigger_press forcing stop from state={self.state}")
-                self._stop_recording(send=False)
-            # Phase 2B: generate request_id at the interaction boundary.
-            self._current_request_id = _generate_request_id()
-            request_id = self._current_request_id
-            # Phase 2: detect Alt key hold (0x12 is VK_MENU)
-            is_alt = bool(user32.GetAsyncKeyState(0x12) & 0x8000)
+                stop_needed = True
+                stop_send = False
+
+        if stop_needed:
+            self._stop_recording(send=stop_send)
+            if stop_send:
+                return
+
+        request_id = _generate_request_id()
+        is_alt = bool(user32.GetAsyncKeyState(0x12) & 0x8000)
+        
+        with self._lock:
+            self.trigger_down = True
+            self._current_request_id = request_id
             self._current_is_dictation = is_alt
-            runtime_trace.trace_event(
-                "interaction_begin",
-                subsystem="input",
-                request_id=request_id,
-                payload={"trigger": "hotkey", "is_dictation": self._current_is_dictation},
-            )
-            if self.on_interrupt:
-                try:
-                    self.on_interrupt("voice_press")
-                except Exception:
-                    pass
             self.f23_down_time = time.monotonic()
+            self.state = "recording_hold"
+
+        runtime_trace.trace_event(
+            "interaction_begin",
+            subsystem="input",
+            request_id=request_id,
+            payload={"trigger": "hotkey", "is_dictation": is_alt},
+        )
+        if self.on_interrupt:
             try:
-                self.recorder.start()
-            except AudioUnavailable as exc:
-                self.state = "idle"
-                self._current_request_id = None
-                trace_startup(f"_handle_trigger_press audio unavailable: {exc}")
-                runtime_trace.trace_event(
-                    "audio_unavailable",
-                    subsystem="input",
-                    severity=runtime_trace.WARNING,
-                    request_id=request_id,
-                    payload={"error": str(exc)},
-                )
-                self._update_surface_state("error", str(exc))
-                return
-            except Exception as exc:
-                self.state = "idle"
-                self._current_request_id = None
-                trace_startup(f"_handle_trigger_press recorder failure: {exc}")
-                runtime_trace.trace_event(
-                    "recorder_failure",
-                    subsystem="input",
-                    severity=runtime_trace.ERROR,
-                    request_id=request_id,
-                    payload={"error": str(exc)},
-                )
-                self._update_surface_state("error", f"mic failed: {exc}")
-                return
-            state_to_push = "dictating" if self._current_is_dictation else "listening"
-            trace_startup(f"_handle_trigger_press recorder started; state=recording_hold is_dictation={self._current_is_dictation}")
+                self.on_interrupt("voice_press")
+            except Exception:
+                pass
+
+        try:
+            self.recorder.start()
+        except AudioUnavailable as exc:
+            with self._lock:
+                if self._current_request_id == request_id:
+                    self.state = "idle"
+                    self._current_request_id = None
+                    self.trigger_down = False
+            trace_startup(f"_handle_trigger_press audio unavailable: {exc}")
+            runtime_trace.trace_event(
+                "audio_unavailable",
+                subsystem="input",
+                severity=runtime_trace.WARNING,
+                request_id=request_id,
+                payload={"error": str(exc)},
+            )
+            self._update_surface_state("error", str(exc))
+            return
+        except Exception as exc:
+            with self._lock:
+                if self._current_request_id == request_id:
+                    self.state = "idle"
+                    self._current_request_id = None
+                    self.trigger_down = False
+            trace_startup(f"_handle_trigger_press recorder failure: {exc}")
+            runtime_trace.trace_event(
+                "recorder_failure",
+                subsystem="input",
+                severity=runtime_trace.ERROR,
+                request_id=request_id,
+                payload={"error": str(exc)},
+            )
+            self._update_surface_state("error", f"mic failed: {exc}")
+            return
+
+        with self._lock:
+            still_active = (self._current_request_id == request_id)
+
+        if still_active:
+            state_to_push = "dictating" if is_alt else "listening"
+            trace_startup(f"_handle_trigger_press recorder started; state=recording_hold is_dictation={is_alt}")
             runtime_trace.trace_event(
                 "surface_state_push",
                 subsystem="input",
@@ -452,6 +479,11 @@ class InputHandler:
 
     def _handle_trigger_release(self):
         trace_startup(f"_handle_trigger_release entry state={self.state} trigger_down={self.trigger_down}")
+        
+        call_stop = False
+        send_audio = False
+        request_id_to_update = None
+        
         with self._lock:
             if not self.trigger_down:
                 trace_startup("_handle_trigger_release ignored because trigger not down")
@@ -468,24 +500,37 @@ class InputHandler:
                     self.last_tap_time = None
                     self.state = "continuous_recording"
                     trace_startup("_handle_trigger_release entered continuous recording")
-                    self._update_surface_state("listening", request_id=self._current_request_id)
-                    return
-                self.last_tap_time = now
-                trace_startup(f"_handle_trigger_release tap detected elapsed={elapsed:.3f}")
-                self._stop_recording(send=True)
-                return
+                    request_id_to_update = self._current_request_id
+                else:
+                    self.last_tap_time = now
+                    trace_startup(f"_handle_trigger_release tap detected elapsed={elapsed:.3f}")
+                    call_stop = True
+                    send_audio = True
+            else:
+                self.last_tap_time = None
+                trace_startup(f"_handle_trigger_release hold detected elapsed={elapsed:.3f}")
+                call_stop = True
+                send_audio = True
 
-            self.last_tap_time = None
-            trace_startup(f"_handle_trigger_release hold detected elapsed={elapsed:.3f}")
-            self._stop_recording(send=True)
+        if request_id_to_update:
+            self._update_surface_state("listening", request_id=request_id_to_update)
+        elif call_stop:
+            self._stop_recording(send=send_audio)
 
     def _stop_recording(self, send):
         trace_startup(f"_stop_recording send={send} state={self.state}")
-        request_id = self._current_request_id
+        
+        with self._lock:
+            request_id = self._current_request_id
+            is_dictation = self._current_is_dictation
+            self.state = "idle"
+            self.f23_down_time = None
+            self.trigger_down = False
+            self._current_request_id = None
+            self._current_is_dictation = False
+            
         audio_bytes, duration = self.recorder.stop()
-        self.state = "idle"
-        self.f23_down_time = None
-        self.trigger_down = False
+        
         if not send or duration < self.min_audio_seconds or not audio_bytes:
             trace_startup(
                 f"_stop_recording discarded send={send} duration={duration:.3f} bytes={len(audio_bytes)}"
@@ -496,8 +541,6 @@ class InputHandler:
                 request_id=request_id,
                 payload={"send": send, "duration": round(duration, 3)},
             )
-            self._current_request_id = None
-            self._current_is_dictation = False
             try:
                 self._update_surface_state("idle", request_id=request_id)
             except Exception as _exc:
@@ -512,6 +555,7 @@ class InputHandler:
                 trace_startup("surface_state_push EXCEPTION (idle)\n" + _tb.format_exc())
                 raise
             return
+            
         trace_startup(f"_stop_recording dispatching duration={duration:.3f} bytes={len(audio_bytes)}")
         runtime_trace.trace_event(
             "audio_dispatch",
@@ -519,11 +563,7 @@ class InputHandler:
             request_id=request_id,
             payload={"duration": round(duration, 3), "bytes": len(audio_bytes)},
         )
-        self._dispatch_audio(audio_bytes, duration, request_id=request_id, is_dictation=self._current_is_dictation)
-        # Phase 2B: clear after handing off to pipeline.
-        # The request_id is now owned by on_audio's callee (main.py).
-        self._current_request_id = None
-        self._current_is_dictation = False
+        self._dispatch_audio(audio_bytes, duration, request_id=request_id, is_dictation=is_dictation)
 
     def _dispatch_audio(self, audio_bytes, duration, *, request_id: str | None = None, is_dictation: bool = False):
         def run_pipeline():

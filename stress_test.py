@@ -516,6 +516,87 @@ class AprilStressTests(unittest.TestCase):
             self.assertEqual(res, "Hello dictation mode. This is a test\nand we are recording")
             mock_controller.type.assert_called_once_with("Hello dictation mode. This is a test\nand we are recording")
 
+    def test_input_handler_concurrency_and_key_repeat(self):
+        from input_handler import InputHandler
+        import threading
+        import time
+
+        mock_surface = mock.MagicMock()
+        handler = InputHandler(
+            surface=mock_surface,
+            config={
+                "copilot_hold_threshold": 0.1,
+                "copilot_double_tap_window": 0.2,
+                "copilot_min_audio_seconds": 0.05,
+            },
+        )
+        handler.recorder = mock.MagicMock()
+        handler.recorder.stop.return_value = (b"fake wav data", 0.5)
+
+        # 1. First trigger press (simulates F23 keydown)
+        handler._handle_trigger_press()
+        self.assertTrue(handler.trigger_down)
+        self.assertEqual(handler.state, "recording_hold")
+        handler.recorder.start.assert_called_once()
+
+        # 2. Key repeat triggers (should be ignored because trigger_down is True)
+        handler.recorder.start.reset_mock()
+        handler._handle_trigger_press()
+        handler._handle_trigger_press()
+        self.assertTrue(handler.trigger_down)
+        self.assertEqual(handler.state, "recording_hold")
+        handler.recorder.start.assert_not_called()
+
+        # 3. Trigger release (simulates F23 keyup) after delay (hold)
+        time.sleep(0.15)
+        handler._handle_trigger_release()
+        self.assertFalse(handler.trigger_down)
+        self.assertEqual(handler.state, "idle")
+        handler.recorder.stop.assert_called_once()
+
+        # 4. Double tap test
+        handler.recorder.start.reset_mock()
+        handler.recorder.stop.reset_mock()
+        handler.recorder.stop.return_value = (b"fake wav data", 0.05)
+
+        # Tap 1 press
+        handler._handle_trigger_press()
+        self.assertEqual(handler.state, "recording_hold")
+        # Tap 1 release
+        handler._handle_trigger_release()
+        self.assertEqual(handler.state, "idle")
+
+        # Tap 2 press
+        handler._handle_trigger_press()
+        self.assertEqual(handler.state, "recording_hold")
+        # Tap 2 release (within double tap window)
+        handler._handle_trigger_release()
+        self.assertEqual(handler.state, "continuous_recording")
+
+        # Pressing again should end continuous recording
+        handler.recorder.stop.reset_mock()
+        handler._handle_trigger_press()
+        self.assertEqual(handler.state, "idle")
+        handler.recorder.stop.assert_called_once()
+
+        # 5. Concurrent press/release flooding (should not deadlock)
+        handler.recorder.start.reset_mock()
+        handler.recorder.stop.reset_mock()
+        handler.recorder.stop.return_value = (b"fake wav", 0.5)
+
+        threads = []
+        for _ in range(10):
+            t_press = threading.Thread(target=handler._handle_trigger_press)
+            t_release = threading.Thread(target=handler._handle_trigger_release)
+            threads.extend([t_press, t_release])
+
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        self.assertIn(handler.state, ["idle", "recording_hold", "continuous_recording"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
