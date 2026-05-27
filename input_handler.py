@@ -255,12 +255,12 @@ class NativeCopilotHook:
     def _hook_proc(self, n_code, w_param, l_param):
         if n_code == HC_ACTION:
             event = ctypes.cast(l_param, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
+            LLKHF_INJECTED = 0x10
             if event.vkCode == VK_F23:
                 # Filter injected events: the Copilot key fires a synthetic
                 # injected event (LLKHF_INJECTED, flags bit 4 = 0x10) before
                 # the real hardware event.  Ignore injected events so that
                 # only the real keydown/keyup reaches the handler.
-                LLKHF_INJECTED = 0x10
                 if event.flags & LLKHF_INJECTED:
                     return 1  # suppress but do not dispatch
                 if w_param in (WM_KEYDOWN, WM_SYSKEYDOWN):
@@ -268,6 +268,11 @@ class NativeCopilotHook:
                 elif w_param in (WM_KEYUP, WM_SYSKEYUP):
                     threading.Thread(target=self.handler._handle_trigger_release, daemon=True).start()
                 return 1
+            elif event.flags & LLKHF_INJECTED:
+                # Suppress injected modifiers (Win, Shift, Ctrl) to prevent MS Copilot 365 / Office app launcher from opening
+                # (0x5B/0x5C: LWIN/RWIN, 0xA0/0xA1: LSHIFT/RSHIFT, 0xA2/0xA3: LCONTROL/RCONTROL)
+                if event.vkCode in (0x5B, 0x5C, 0xA0, 0xA1, 0xA2, 0xA3):
+                    return 1
         return user32.CallNextHookEx(self._hook, n_code, w_param, l_param)
 
 
