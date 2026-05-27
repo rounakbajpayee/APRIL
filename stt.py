@@ -30,6 +30,24 @@ def transcribe(audio_bytes: bytes, config: dict[str, Any]) -> str:
     return transcript
 
 
+def _calculate_rms(audio_bytes: bytes) -> float:
+    import struct
+    import math
+    if not audio_bytes:
+        return 0.0
+    try:
+        raw_samples = audio_bytes[44:] if len(audio_bytes) > 44 else audio_bytes
+        sample_count = len(raw_samples) // 2
+        if sample_count == 0:
+            return 0.0
+        shorts = struct.unpack(f"{sample_count}h", raw_samples)
+        mean = sum(shorts) / sample_count
+        sum_squares = sum((s - mean) ** 2 for s in shorts)
+        return math.sqrt(sum_squares / sample_count)
+    except Exception:
+        return 0.0
+
+
 def transcribe_with_metadata(audio_bytes: bytes, config: dict[str, Any]) -> tuple[str, dict[str, str]]:
     """
     Convert WAV audio bytes into text.
@@ -39,6 +57,12 @@ def transcribe_with_metadata(audio_bytes: bytes, config: dict[str, Any]) -> tupl
     if not audio_bytes:
         return "", {}
 
+    # Silence filtering
+    silence_threshold = float(config.get("stt_silence_threshold", 350.0))
+    rms = _calculate_rms(audio_bytes)
+    if rms < silence_threshold:
+        return "", {"stt_source": "silence_filter", "rms": f"{rms:.1f}"}
+
     prefer_local = str(config.get("stt_mode", "remote_first") or "remote_first").strip().lower() != "remote_first"
     whisper_host = str(config.get("whisper_host", "") or "").strip()
 
@@ -46,10 +70,10 @@ def transcribe_with_metadata(audio_bytes: bytes, config: dict[str, Any]) -> tupl
     if prefer_local:
         attempts.append(("local", lambda: _transcribe_local(audio_bytes, config)))
         if whisper_host:
-            attempts.append(("remote", lambda: _transcribe_remote(audio_bytes, whisper_host)))
+            attempts.append(("remote", lambda: _transcribe_remote(audio_bytes, whisper_host, config)))
     else:
         if whisper_host:
-            attempts.append(("remote", lambda: _transcribe_remote(audio_bytes, whisper_host)))
+            attempts.append(("remote", lambda: _transcribe_remote(audio_bytes, whisper_host, config)))
         attempts.append(("local", lambda: _transcribe_local(audio_bytes, config)))
 
     last_meta: dict[str, str] = {}
@@ -68,7 +92,7 @@ def transcribe_with_metadata(audio_bytes: bytes, config: dict[str, Any]) -> tupl
     return "", last_meta
 
 
-def _transcribe_remote(audio_bytes: bytes, whisper_host: str) -> str:
+def _transcribe_remote(audio_bytes: bytes, whisper_host: str, config: dict[str, Any]) -> str:
     try:
         import requests
     except ImportError as exc:
@@ -78,9 +102,18 @@ def _transcribe_remote(audio_bytes: bytes, whisper_host: str) -> str:
     files = {
         "file": ("april_input.wav", audio_bytes, "audio/wav"),
     }
+    
+    language = str(config.get("stt_language", "en") or "en").strip()
+    initial_prompt = str(config.get("stt_initial_prompt", "APRIL") or "APRIL").strip()
+    
     data = {
         "model": "whisper-1",
+        "language": language,
+        "temperature": "0.0",
     }
+    if initial_prompt:
+        data["prompt"] = initial_prompt
+
     response = requests.post(url, files=files, data=data, timeout=DEFAULT_TIMEOUT_SECONDS)
     response.raise_for_status()
     return _extract_text(response)

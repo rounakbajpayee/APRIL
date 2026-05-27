@@ -431,7 +431,13 @@ def _post_process_dictation(text: str) -> str:
     # 2. Spoken Punctuation mapping
     punctuation_map = [
         ("new paragraph", "\n\n"),
+        ("newparagraph", "\n\n"),
         ("new line", "\n"),
+        ("newline", "\n"),
+        ("sew line", "\n"),
+        ("sewline", "\n"),
+        ("shoe line", "\n"),
+        ("shoeline", "\n"),
         ("exclamation point", "!"),
         ("exclamation mark", "!"),
         ("question mark", "?"),
@@ -488,6 +494,14 @@ def on_audio_captured(audio_bytes: bytes, duration: float, request_id_str: str |
         state_to_push = "dictating" if is_dictation else "listening"
         _bridge_ref.set_state(state_to_push, request_id=request_id_str)
         _bridge_ref.set_task("Dictating…" if is_dictation else "Listening…")
+
+    if is_dictation:
+        dictation_prompt = "dictation, new line, newline, new paragraph, period, comma, question mark, exclamation point, test 1, test 2, April, say hi."
+        existing_prompt = str(config.get("stt_initial_prompt", "") or "").strip()
+        if existing_prompt:
+            config = dict(config, stt_initial_prompt=f"{existing_prompt}, {dictation_prompt}")
+        else:
+            config = dict(config, stt_initial_prompt=dictation_prompt)
 
     stt_job_id = _format_job_id("STT")
     runtime_trace.trace_event(
