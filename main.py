@@ -9,6 +9,8 @@ import os
 import sys
 import threading
 import traceback
+import hashlib
+from uuid import uuid4
 
 from brain import process as plan_with_brain
 from debug_log import log_event
@@ -30,6 +32,8 @@ TRACE_PATH = os.path.join(BASE_DIR, "logs", "startup_trace.log")
 _request_lock = threading.Lock()
 _latest_request_id = 0
 _bridge_ref = None          # APRILBridge | None
+_session_id = uuid4().hex
+_system_prompt_hash = ""
 
 
 def _format_request_id(request_id: int) -> str:
@@ -71,11 +75,27 @@ def trace_startup(message: str) -> None:
 def load_config() -> dict:
     config = {}
     if os.path.exists(DEFAULT_PATH):
-        with open(DEFAULT_PATH, encoding="utf-8") as f:
-            config.update(json.load(f))
+        try:
+            with open(DEFAULT_PATH, encoding="utf-8") as f:
+                config.update(json.load(f))
+        except (json.JSONDecodeError, OSError) as exc:
+            runtime_trace.trace_event(
+                "config_load_error",
+                subsystem="config",
+                severity=runtime_trace.WARNING,
+                payload={"file": "config_defaults.json", "error": str(exc)},
+            )
     if os.path.exists(CONFIG_PATH):
-        with open(CONFIG_PATH, encoding="utf-8") as f:
-            config.update(json.load(f))
+        try:
+            with open(CONFIG_PATH, encoding="utf-8") as f:
+                config.update(json.load(f))
+        except (json.JSONDecodeError, OSError) as exc:
+            runtime_trace.trace_event(
+                "config_load_error",
+                subsystem="config",
+                severity=runtime_trace.WARNING,
+                payload={"file": "config.json", "error": str(exc)},
+            )
         return config
     if config:
         return config
@@ -213,184 +233,209 @@ def handle_user_text(text: str, source: str = "text", request_id: int | None = N
     if _bridge_ref is not None:
         _bridge_ref.set_state("thinking", request_id=request_id_str)
         _bridge_ref.set_task(f"Processing: {text[:60]}")
-
-    brain_job_id = _format_job_id("BRAIN")
-    runtime_trace.trace_event(
-        "brain_begin",
-        subsystem="brain",
-        request_id=request_id_str,
-        job_id=brain_job_id,
-        payload={"source": source, "text_len": len(text)},
-    )
-    plan = plan_with_brain(text, config)
-    runtime_trace.trace_event(
-        "intent_planned",
-        subsystem="brain",
-        request_id=request_id_str,
-        job_id=brain_job_id,
-        payload={"intent": plan.get("intent"), "source": source},
-    )
-    log_event(
-        "intent_plan",
-        source=source,
-        request_id=request_id,
-        intent=plan.get("intent"),
-        action=plan.get("action"),
-    )
-    record_state_event(
-        "intent_planned",
-        source=source,
-        state="observed",
-        entity_id=f"request_{request_id}" if request_id is not None else None,
-        payload={
-            "source": source,
-            "request_id": request_id,
-            "text": text,
-            "intent": plan.get("intent"),
-            "action": plan.get("action"),
-        },
-        config=config,
-    )
-    if request_id is not None and not is_request_current(request_id):
-        log_event("response_discarded", source=source, text=text, response="", request_id=request_id)
-        record_state_event(
-            "response_discarded",
-            source=source,
-            state="updated",
-            entity_id=f"request_{request_id}",
-            payload={"source": source, "request_id": request_id, "text": text},
-            config=config,
-        )
-        return ""
-
-    result = execute_plan(
-        plan,
-        config,
-        context={
-            "text": text,
-            "source": source,
-            "config_callback": on_config_change,
-        },
-    )
-    response = str(result.get("reply", "") or "").strip()
-    ok = bool(result.get("ok", bool(response)))
-    error_kind = str(result.get("error_kind", "") or "").strip()
-    log_event(
-        "action_result",
-        source=source,
-        request_id=request_id,
-        intent=plan.get("intent"),
-        ok=ok,
-        reply=response,
-        config_changed=bool(result.get("config_changed")),
-    )
-    record_state_event(
-        "action_completed" if ok else "action_failed",
-        source=source,
-        state="completed" if ok else "failed",
-        entity_id=f"request_{request_id}" if request_id is not None else None,
-        payload={
-            "source": source,
-            "request_id": request_id,
-            "text": text,
-            "intent": plan.get("intent"),
-            "reply": response,
-            "ok": ok,
-            "error_kind": error_kind,
-            "config_changed": bool(result.get("config_changed")),
-        },
-        config=config,
-    )
-    if request_id is not None and not is_request_current(request_id):
-        log_event("response_discarded", source=source, text=text, response=response, request_id=request_id)
-        record_state_event(
-            "response_discarded",
-            source=source,
-            state="updated",
-            entity_id=f"request_{request_id}",
-            payload={"source": source, "request_id": request_id, "text": text, "response": response},
-            config=config,
-        )
-        return ""
-
-    if result.get("config_changed"):
-        config = load_config()
-        updates = result.get("updates")
-        if isinstance(updates, dict) and updates:
-            record_state_event(
-                "config_changed",
-                source=source,
-                state="updated",
-                entity_id="runtime_config",
-                payload={"source": source, "updates": updates},
-                config=config,
-            )
-
-    record_semantic_example(
-        kind="turn",
-        text=text,
-        source=source,
-        resolved_intent=str(plan.get("intent", "") or ""),
-        response=response,
-        action=plan.get("action") if isinstance(plan.get("action"), dict) else {},
-        outcome="success" if ok else "failure",
-        subject_type="utterance",
-        subject_ref=str(request_id or ""),
-        confidence=1.0 if ok else 0.6,
-        metadata={
-            "request_id": request_id,
-            "source": source,
-            "ok": ok,
-            "error_kind": error_kind,
-            "config_changed": bool(result.get("config_changed")),
-        },
-    )
-    if response:
-        print(f"[main] assistant response: {response}")
-        log_event("assistant_response", source=source, response=response, request_id=request_id)
+    _error_in_pipeline = None
+    try:
+        brain_job_id = _format_job_id("BRAIN")
         runtime_trace.trace_event(
-            "assistant_response",
+            "brain_begin",
             subsystem="brain",
             request_id=request_id_str,
             job_id=brain_job_id,
-            payload={"source": source, "reply_len": len(response)},
+            payload={"source": source, "text_len": len(text)},
         )
-        append_turn(text, response, source=source)
-        record_state_event(
-            "assistant_replied",
+        plan = plan_with_brain(text, config)
+        runtime_trace.trace_event(
+            "intent_planned",
+            subsystem="brain",
+            request_id=request_id_str,
+            job_id=brain_job_id,
+            payload={"intent": plan.get("intent"), "source": source},
+        )
+        log_event(
+            "intent_plan",
             source=source,
-            state="completed",
+            request_id=request_id,
+            intent=plan.get("intent"),
+            action=plan.get("action"),
+        )
+        record_state_event(
+            "intent_planned",
+            source=source,
+            state="observed",
             entity_id=f"request_{request_id}" if request_id is not None else None,
-            payload={"source": source, "request_id": request_id, "response": response},
+            payload={
+                "source": source,
+                "request_id": request_id,
+                "text": text,
+                "intent": plan.get("intent"),
+                "action": plan.get("action"),
+            },
             config=config,
         )
-        tts_job_id = _format_job_id("TTS")
-        runtime_trace.trace_event(
-            "tts_begin",
-            subsystem="tts",
-            request_id=request_id_str,
-            job_id=tts_job_id,
-            payload={"source": source, "reply_len": len(response)},
-        )
-        if _bridge_ref is not None:
-            _bridge_ref.set_state("speaking", request_id=request_id_str)
-            _bridge_ref.set_transcript(response)
-            _bridge_ref.set_task("Speaking")
-            _bridge_ref.append_log(f"reply ({source}): {response[:120]}")
-        speak_reply(
-            response,
+        if request_id is not None and not is_request_current(request_id):
+            log_event("response_discarded", source=source, text=text, response="", request_id=request_id)
+            record_state_event(
+                "response_discarded",
+                source=source,
+                state="updated",
+                entity_id=f"request_{request_id}",
+                payload={"source": source, "request_id": request_id, "text": text},
+                config=config,
+            )
+            return ""
+
+        result = execute_plan(
+            plan,
             config,
-            on_done=lambda _ok: _on_speak_done(response, request_id_str, tts_job_id),
+            context={
+                "text": text,
+                "source": source,
+                "config_callback": on_config_change,
+            },
         )
-        return response
+        response = str(result.get("reply", "") or "").strip()
+        ok = bool(result.get("ok", bool(response)))
+        error_kind = str(result.get("error_kind", "") or "").strip()
+        log_event(
+            "action_result",
+            source=source,
+            request_id=request_id,
+            intent=plan.get("intent"),
+            ok=ok,
+            reply=response,
+            config_changed=bool(result.get("config_changed")),
+        )
+        record_state_event(
+            "action_completed" if ok else "action_failed",
+            source=source,
+            state="completed" if ok else "failed",
+            entity_id=f"request_{request_id}" if request_id is not None else None,
+            payload={
+                "source": source,
+                "request_id": request_id,
+                "text": text,
+                "intent": plan.get("intent"),
+                "reply": response,
+                "ok": ok,
+                "error_kind": error_kind,
+                "config_changed": bool(result.get("config_changed")),
+            },
+            config=config,
+        )
+        if request_id is not None and not is_request_current(request_id):
+            log_event("response_discarded", source=source, text=text, response=response, request_id=request_id)
+            record_state_event(
+                "response_discarded",
+                source=source,
+                state="updated",
+                entity_id=f"request_{request_id}",
+                payload={"source": source, "request_id": request_id, "text": text, "response": response},
+                config=config,
+            )
+            return ""
 
-    if _bridge_ref is not None:
-        _bridge_ref.set_state("idle", request_id=request_id_str)
-        _bridge_ref.set_task("")
+        if result.get("config_changed"):
+            config = load_config()
+            updates = result.get("updates")
+            if isinstance(updates, dict) and updates:
+                record_state_event(
+                    "config_changed",
+                    source=source,
+                    state="updated",
+                    entity_id="runtime_config",
+                    payload={"source": source, "updates": updates},
+                    config=config,
+                )
 
-    if source == "voice":
-        return f"Heard: {text}"
-    return "I heard you, but I do not have a reply yet."
+        _enriched = plan.get("_enriched_context") or {}
+        _enriched_str = ""
+        if _enriched.get("memory"):
+            _enriched_str += f"Memory:\n{_enriched['memory']}\n\n"
+        if _enriched.get("state"):
+            _enriched_str += f"State:\n{_enriched['state']}"
+
+        record_semantic_example(
+            kind="turn",
+            text=text,
+            source=source,
+            resolved_intent=str(plan.get("intent", "") or ""),
+            response=response,
+            action=plan.get("action") if isinstance(plan.get("action"), dict) else {},
+            outcome="success" if ok else "failure",
+            subject_type="utterance",
+            subject_ref=str(request_id or ""),
+            confidence=1.0 if ok else 0.6,
+            metadata={
+                "request_id": request_id,
+                "source": source,
+                "ok": ok,
+                "error_kind": error_kind,
+                "config_changed": bool(result.get("config_changed")),
+            },
+            session_id=_session_id,
+            system_prompt_hash=_system_prompt_hash,
+            enriched_context=_enriched_str.strip(),
+        )
+        if response:
+            print(f"[main] assistant response: {response}")
+            log_event("assistant_response", source=source, response=response, request_id=request_id)
+            runtime_trace.trace_event(
+                "assistant_response",
+                subsystem="brain",
+                request_id=request_id_str,
+                job_id=brain_job_id,
+                payload={"source": source, "reply_len": len(response)},
+            )
+            append_turn(text, response, source=source)
+            record_state_event(
+                "assistant_replied",
+                source=source,
+                state="completed",
+                entity_id=f"request_{request_id}" if request_id is not None else None,
+                payload={"source": source, "request_id": request_id, "response": response},
+                config=config,
+            )
+            tts_job_id = _format_job_id("TTS")
+            runtime_trace.trace_event(
+                "tts_begin",
+                subsystem="tts",
+                request_id=request_id_str,
+                job_id=tts_job_id,
+                payload={"source": source, "reply_len": len(response)},
+            )
+            if _bridge_ref is not None:
+                _bridge_ref.set_state("speaking", request_id=request_id_str)
+                _bridge_ref.set_transcript(response)
+                _bridge_ref.set_task("Speaking")
+                _bridge_ref.append_log(f"reply ({source}): {response[:120]}")
+            speak_reply(
+                response,
+                config,
+                on_done=lambda _ok: _on_speak_done(response, request_id_str, tts_job_id),
+            )
+            return response
+
+        if _bridge_ref is not None:
+            _bridge_ref.set_state("idle", request_id=request_id_str)
+            _bridge_ref.set_task("")
+
+        if source == "voice":
+            return f"Heard: {text}"
+        return "I heard you, but I do not have a reply yet."
+    except Exception as exc:
+        _error_in_pipeline = exc
+        runtime_trace.trace_event(
+            "pipeline_error",
+            subsystem="brain",
+            severity=runtime_trace.ERROR,
+            request_id=request_id_str,
+            payload={"error": str(exc), "source": source, "text": text[:120]},
+        )
+        raise
+    finally:
+        if _error_in_pipeline is not None and _bridge_ref is not None:
+            _bridge_ref.set_state("idle", request_id=request_id_str)
+            _bridge_ref.set_task("")
 
 
 def _on_speak_done(response: str, request_id_str: str | None = None, tts_job_id: str | None = None) -> None:
@@ -511,7 +556,21 @@ def on_audio_captured(audio_bytes: bytes, duration: float, request_id_str: str |
         job_id=stt_job_id,
         payload={"duration": round(duration, 3)},
     )
-    transcript, stt_meta = transcribe_with_metadata(audio_bytes, config)
+    try:
+        transcript, stt_meta = transcribe_with_metadata(audio_bytes, config)
+    except Exception as stt_exc:
+        runtime_trace.trace_event(
+            "stt_error",
+            subsystem="stt",
+            severity=runtime_trace.ERROR,
+            request_id=request_id_str,
+            job_id=stt_job_id,
+            payload={"error": str(stt_exc)},
+        )
+        if _bridge_ref is not None:
+            _bridge_ref.set_state("idle", request_id=request_id_str)
+            _bridge_ref.set_task("")
+        return "I captured that, but transcription failed unexpectedly."
     if not transcript.strip():
         print("[main] transcription unavailable")
         log_event("transcription_unavailable", request_id=request_id, **stt_meta)
@@ -564,6 +623,13 @@ def on_audio_captured(audio_bytes: bytes, duration: float, request_id_str: str |
                 keyboard.type(cleaned)
             except Exception as e:
                 print(f"[main] dictation keyboard type failed: {e}")
+                runtime_trace.trace_event(
+                    "dictation_type_error",
+                    subsystem="input",
+                    severity=runtime_trace.ERROR,
+                    request_id=request_id_str,
+                    payload={"error": str(e)},
+                )
         runtime_trace.trace_event(
             "dictation_completed",
             subsystem="input",
@@ -603,6 +669,9 @@ def main():
     global _bridge_ref
     trace_startup("main() entered")
     config = load_config()
+    global _system_prompt_hash
+    from brain import _system_prompt
+    _system_prompt_hash = hashlib.sha256(_system_prompt(config).encode("utf-8")).hexdigest()[:16]
     trace_startup(f"config loaded voice={config.get('voice')} at_home={config.get('at_home')}")
     if not acquire_single_instance():
         trace_startup("duplicate instance detected; exiting")

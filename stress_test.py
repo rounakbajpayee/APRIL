@@ -646,6 +646,99 @@ class AprilStressTests(unittest.TestCase):
         raw3 = "This is a test shoeline and we are done"
         self.assertEqual(_post_process_dictation(raw3), "This is a test\nand we are done")
 
+    def test_pipeline_error_recovery_and_stuck_state(self):
+        mock_bridge = mock.MagicMock()
+        with (
+            mock.patch("main._bridge_ref", mock_bridge),
+            mock.patch("main.plan_with_brain", side_effect=ConnectionError("Ollama offline")),
+            mock.patch("runtime_trace.trace_event") as mock_trace,
+        ):
+            with self.assertRaises(ConnectionError):
+                main.handle_user_text("test exception recovery", source="text", request_id=45, request_id_str="REQ-0045")
+            
+            # Verify bridge was set to thinking first
+            mock_bridge.set_state.assert_any_call("thinking", request_id="REQ-0045")
+            # Verify bridge was reset to idle in the finally block
+            mock_bridge.set_state.assert_any_call("idle", request_id="REQ-0045")
+            
+            # Verify trace_event logged the pipeline error
+            mock_trace.assert_any_call(
+                "pipeline_error",
+                subsystem="brain",
+                severity="ERROR",
+                request_id="REQ-0045",
+                payload={"error": "Ollama offline", "source": "text", "text": "test exception recovery"},
+            )
+
+    def test_sft_export_format(self):
+        import export_sft
+        # Write sample semantic records to the temporary test path
+        # Note: SEMANTIC_PATH in setup is mapping to a clean test file.
+        records = [
+            {
+                "id": "sem_1",
+                "ts": "2026-05-27T12:00:00Z",
+                "kind": "turn",
+                "source": "text",
+                "text": "turn on voice",
+                "response": "Turning voice on.",
+                "action": {"updates": {"voice": True}},
+                "outcome": "success",
+                "confidence": 1.0,
+                "session_id": "session_abc",
+                "system_prompt_hash": "hash_123",
+                "enriched_context": "State:\nactive\n\nMemory:\nnone",
+            },
+            {
+                "id": "sem_2",
+                "ts": "2026-05-27T12:01:00Z",
+                "kind": "turn",
+                "source": "text",
+                "text": "open youtube",
+                "response": "Opening YouTube.",
+                "action": {"mode": "open_url", "url": "https://www.youtube.com"},
+                "outcome": "success",
+                "confidence": 1.0,
+                "session_id": "session_abc",
+                "system_prompt_hash": "hash_123",
+                "enriched_context": "State:\nactive",
+            }
+        ]
+        
+        with open(SEMANTIC_PATH, "w", encoding="utf-8") as f:
+            for r in records:
+                f.write(json.dumps(r) + "\n")
+                
+        # Run export_sft with custom args
+        output_file = BASE_DIR / "state" / "sft_export_test.jsonl"
+        if output_file.exists():
+            output_file.unlink()
+            
+        try:
+            # We mock sys.argv to run the main() function in export_sft
+            with mock.patch("sys.argv", ["export_sft.py", "--output", str(output_file), "--format", "chat"]):
+                export_sft.main()
+                
+            self.assertTrue(output_file.exists())
+            lines = output_file.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(lines), 1)  # Grouped into 1 multi-turn session
+            
+            exported = json.loads(lines[0])
+            self.assertIn("messages", exported)
+            messages = exported["messages"]
+            self.assertEqual(messages[0]["role"], "system")
+            self.assertEqual(messages[1]["role"], "user")
+            self.assertEqual(messages[1]["content"], "turn on voice")
+            self.assertEqual(messages[2]["role"], "assistant")
+            self.assertEqual(messages[2]["content"], "Turning voice on.")
+            self.assertEqual(messages[3]["role"], "user")
+            self.assertEqual(messages[3]["content"], "open youtube")
+            self.assertEqual(messages[4]["role"], "assistant")
+            self.assertEqual(messages[4]["content"], "Opening YouTube.")
+        finally:
+            if output_file.exists():
+                output_file.unlink()
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -20,6 +20,7 @@ from learning import apply_rewrites
 from memory import summarize_recent
 import semantic_store
 from state_engine import get_prompt_context_summary, load_snapshot
+import runtime_trace
 
 
 DEFAULT_TIMEOUT_SECONDS = 30
@@ -68,9 +69,13 @@ def process(text: str, config: dict[str, Any]) -> dict[str, Any]:
     if not clean:
         return _conversation_plan("", "")
 
+    # Capture enriched context for training data recording
+    _state_context = get_prompt_context_summary(limit=int(config.get("state_context_timeline_limit", 6)))
+    _memory_context = summarize_recent(limit=int(config.get("memory_context_turns", 6)))
+
     local_reply = _local_reply(clean, config)
     if local_reply:
-        return {
+        plan = {
             "intent": "conversation",
             "response_preview": local_reply,
             "action": {
@@ -79,19 +84,27 @@ def process(text: str, config: dict[str, Any]) -> dict[str, Any]:
                 "text": clean,
             },
         }
+        plan["_enriched_context"] = {"memory": _memory_context or "", "state": _state_context or ""}
+        return plan
 
     local_plan = _local_plan(clean, config)
     if local_plan:
+        local_plan["_enriched_context"] = {"memory": _memory_context or "", "state": _state_context or ""}
         return local_plan
 
     if _looks_like_conversation_question(clean):
-        return _conversation_plan(clean, "")
+        plan = _conversation_plan(clean, "")
+        plan["_enriched_context"] = {"memory": _memory_context or "", "state": _state_context or ""}
+        return plan
 
     llm_plan = _ollama_intent_plan(clean, config)
     if llm_plan:
+        llm_plan["_enriched_context"] = {"memory": _memory_context or "", "state": _state_context or ""}
         return llm_plan
 
-    return _conversation_plan(clean, "")
+    plan = _conversation_plan(clean, "")
+    plan["_enriched_context"] = {"memory": _memory_context or "", "state": _state_context or ""}
+    return plan
 
 
 def respond(text: str, config: dict[str, Any]) -> str:
@@ -112,6 +125,12 @@ def respond(text: str, config: dict[str, Any]) -> str:
         return _ollama_chat(clean, config)
     except Exception as exc:
         print(f"[brain] ollama request failed: {exc}")
+        runtime_trace.trace_event(
+            "ollama_request_failed",
+            subsystem="brain",
+            severity=runtime_trace.ERROR,
+            payload={"error": str(exc), "error_type": type(exc).__name__},
+        )
         return "I heard you, but my brain service is unavailable right now."
 
 
@@ -135,7 +154,13 @@ def summarize_output(raw_output: str, original_request: str, config: dict[str, A
     )
     try:
         return _ollama_chat(prompt, config)
-    except Exception:
+    except Exception as exc:
+        runtime_trace.trace_event(
+            "summarize_output_failed",
+            subsystem="brain",
+            severity=runtime_trace.WARNING,
+            payload={"error": str(exc)},
+        )
         return _trim_output(clean_output)
 
 
@@ -328,7 +353,13 @@ def _ollama_intent_plan(text: str, config: dict[str, Any]) -> dict[str, Any] | N
                 "Return valid JSON only and no markdown."
             ),
         )
-    except Exception:
+    except Exception as exc:
+        runtime_trace.trace_event(
+            "intent_plan_failed",
+            subsystem="brain",
+            severity=runtime_trace.WARNING,
+            payload={"error": str(exc), "text": text[:120]},
+        )
         return None
 
     message = data.get("message") if isinstance(data, dict) else None

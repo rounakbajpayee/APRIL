@@ -27,7 +27,7 @@ STATE_DIR = BASE_DIR / "state"
 SEMANTIC_PATH = STATE_DIR / "semantic_records.jsonl"
 _lock = Lock()
 _records_cache: list[dict[str, Any]] | None = None
-_MAX_CACHE = 500
+_MAX_CACHE = 5000
 _TOKEN_ALIASES = {
     "doc": "document",
     "docs": "document",
@@ -59,6 +59,9 @@ def record_semantic_example(
     metadata: dict[str, Any] | None = None,
     prompt_safe: bool = True,
     sensitivity: str = "low",
+    session_id: str = "",
+    system_prompt_hash: str = "",
+    enriched_context: str = "",
 ) -> dict[str, Any]:
     clean_text = _normalize_text(text)
     record = {
@@ -76,13 +79,18 @@ def record_semantic_example(
         "subject_ref": _clean_field(subject_ref),
         "confidence": _clean_confidence(confidence),
         "metadata": metadata or {},
+        "session_id": _clean_field(session_id),
+        "system_prompt_hash": _clean_field(system_prompt_hash),
+        "enriched_context": _clean_field(enriched_context),
     }
 
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     with _lock:
         records = _load_unlocked()
         records.append(record)
-        records = records[-_MAX_CACHE:]
+        if len(records) > _MAX_CACHE:
+            _archive_overflow(records[:-_MAX_CACHE])
+            records = records[-_MAX_CACHE:]
         SEMANTIC_PATH.write_text("\n".join(json.dumps(item, ensure_ascii=False) for item in records) + ("\n" if records else ""), encoding="utf-8")
         global _records_cache
         _records_cache = [dict(item) for item in records]
@@ -216,7 +224,24 @@ def _normalize_record(payload: dict[str, Any]) -> dict[str, Any]:
         "subject_ref": _clean_field(payload.get("subject_ref", "")),
         "confidence": _clean_confidence(payload.get("confidence")),
         "metadata": payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {},
+        "session_id": _clean_field(payload.get("session_id", "")),
+        "system_prompt_hash": _clean_field(payload.get("system_prompt_hash", "")),
+        "enriched_context": _clean_field(payload.get("enriched_context", "")),
     }
+
+
+ARCHIVE_PATH = STATE_DIR / "semantic_records_archive.jsonl"
+
+def _archive_overflow(overflow: list[dict[str, Any]]) -> None:
+    """Append overflow records to the archive file so training data is never lost."""
+    if not overflow:
+        return
+    try:
+        with open(ARCHIVE_PATH, "a", encoding="utf-8") as f:
+            for item in overflow:
+                f.write(json.dumps(item, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
 
 
 def _score_match(query: str, query_tokens: list[str], record: dict[str, Any]) -> float:
