@@ -63,15 +63,17 @@ def build_context_snapshot(events: list[dict[str, Any]], config: dict[str, Any] 
             started_at = started_at or timestamp
             current_status = "idle"
         elif event_type == "request_started":
-            current_status = "listening"
+            trigger_kind = str(payload.get("trigger_kind", "") or "").strip()
+            current_status = "dictating" if trigger_kind == "voice_dictation" else "listening"
             current_request = {
                 "request_id": payload.get("request_id"),
                 "source": payload.get("source", ""),
+                "trigger_kind": trigger_kind,
                 "text": payload.get("text", ""),
                 "ts": timestamp,
             }
         elif event_type == "audio_captured":
-            current_status = "transcribing"
+            current_status = "dictating" if payload.get("trigger_kind") == "voice_dictation" else "transcribing"
         elif event_type == "transcript_received":
             transcript = str(payload.get("transcript", "") or "").strip()
             if transcript:
@@ -119,6 +121,13 @@ def build_context_snapshot(events: list[dict[str, Any]], config: dict[str, Any] 
                     recent_replies.append(reply)
             if current_request and request_id == current_request.get("request_id"):
                 current_request = None
+        elif event_type == "action_validated":
+            verdict = str(payload.get("verdict", "") or "").strip()
+            detail = str(payload.get("detail", "") or payload.get("notes", "") or "").strip()
+            if current_request and request_id == current_request.get("request_id"):
+                current_request["validation"] = verdict
+            if verdict and verdict not in {"auto_pass", "confirmed_correct"} and detail:
+                open_loops.append(f"Validation flagged {verdict}: {detail}")
         elif event_type == "response_discarded":
             if current_request and request_id == current_request.get("request_id"):
                 current_request = None
@@ -309,6 +318,9 @@ def _event_summary(event: dict[str, Any]) -> str:
         return "APRIL started."
     if event_type == "request_started":
         source = str(payload.get("source", "") or "").strip() or "unknown"
+        trigger_kind = str(payload.get("trigger_kind", "") or "").strip()
+        if trigger_kind:
+            return f"Request started from {source} via {trigger_kind}."
         return f"Request started from {source}."
     if event_type == "desktop_observed":
         title = str((payload.get("foreground") or {}).get("window_title", "") or "").strip()
@@ -330,6 +342,14 @@ def _event_summary(event: dict[str, Any]) -> str:
     if event_type == "assistant_replied":
         response = str(payload.get("response", "") or "").strip()
         return f"Replied: {response}" if response else ""
+    if event_type == "action_validated":
+        verdict = str(payload.get("verdict", "") or "").strip()
+        detail = str(payload.get("detail", "") or payload.get("notes", "") or "").strip()
+        if verdict and detail:
+            return f"Validation: {verdict} ({detail})."
+        if verdict:
+            return f"Validation: {verdict}."
+        return ""
     if event_type == "response_discarded":
         return "Discarded an outdated response."
     if event_type == "semantic_example_recorded":

@@ -235,6 +235,26 @@ class AprilStressTests(unittest.TestCase):
         self.assertEqual(snapshot["current_state"]["status"], "error")
         self.assertIn("Transcription was unavailable.", snapshot["open_loops"])
 
+    def test_action_validation_projects_open_loop(self):
+        event_ledger.append_event("april_started", source="system", state="started", entity_id="april_runtime")
+        event_ledger.append_event(
+            "request_started",
+            source="voice",
+            state="started",
+            entity_id="request_5",
+            payload={"request_id": 5, "source": "voice", "trigger_kind": "voice_command"},
+        )
+        event_ledger.append_event(
+            "action_validated",
+            source="system",
+            state="observed",
+            entity_id="request_5",
+            payload={"request_id": 5, "verdict": "misroute_intent", "detail": "planner_selected_unexecutable_action"},
+        )
+
+        snapshot = state_engine.refresh_state_snapshot(config=self.config)
+        self.assertIn("Validation flagged misroute_intent: planner_selected_unexecutable_action", snapshot["open_loops"])
+
     def test_execution_dispatch_survives_mixed_workload(self):
         requests = [
             "open youtube",
@@ -476,6 +496,23 @@ class AprilStressTests(unittest.TestCase):
         self.assertEqual(plan["intent"], "shell")
         self.assertEqual(plan["action"].get("mode"), "natural")
 
+    def test_semantic_store_does_not_replay_failed_examples(self):
+        semantic_store.record_semantic_example(
+            kind="turn",
+            text="open local document folder",
+            source="voice",
+            resolved_intent="device",
+            response="I understood that as a device request, but I couldn't map the action yet.",
+            action={"open_app": "local document folder", "text": "open local document folder"},
+            outcome="failure",
+            subject_type="utterance",
+            subject_ref="2",
+            confidence=0.6,
+            validation_label="misroute_intent",
+        )
+        plan = semantic_store.semantic_plan("open local document folder", confidence_threshold=0.1)
+        self.assertIsNone(plan)
+
     def test_semantic_router_uses_examples_for_paraphrases(self):
         plan = brain.process("pull up youtube", self.config)
         self.assertEqual(plan["intent"], "browser")
@@ -500,6 +537,7 @@ class AprilStressTests(unittest.TestCase):
         self.assertEqual(plan["intent"], "shell")
         self.assertEqual(plan["action"].get("mode"), "command")
         self.assertEqual(plan["action"].get("command"), "backup_db.bat")
+        self.assertEqual(plan["_routing"]["planner_source"], "semantic_store_replay")
 
     def test_dictation_mode_types_text(self):
         from main import _post_process_dictation
@@ -508,13 +546,50 @@ class AprilStressTests(unittest.TestCase):
         self.assertEqual(cleaned, "Hello dictation mode. This is a test\nand we are recording")
 
         mock_controller = mock.MagicMock()
+        fake_keyboard = types.SimpleNamespace(Controller=mock.MagicMock(return_value=mock_controller))
+        fake_pynput = types.SimpleNamespace(keyboard=fake_keyboard)
         with (
             mock.patch("main.transcribe_with_metadata", return_value=(raw, {"stt_source": "remote"})),
-            mock.patch("pynput.keyboard.Controller", return_value=mock_controller),
+            mock.patch.dict("sys.modules", {"pynput": fake_pynput, "pynput.keyboard": fake_keyboard}),
         ):
-            res = main.on_audio_captured(b"fake audio", 1.5, is_dictation=True)
+            res = main.on_audio_captured(b"fake audio", 1.5, trigger_kind="voice_dictation")
             self.assertEqual(res, "Hello dictation mode. This is a test\nand we are recording")
             mock_controller.type.assert_called_once_with("Hello dictation mode. This is a test\nand we are recording")
+
+    def test_handle_user_text_records_provenance_and_validation(self):
+        with (
+            mock.patch("main.collect_runtime_observation", return_value={"foreground": {"window_title": "Codex", "app_hint": "Codex"}}),
+            mock.patch(
+                "main.plan_with_brain",
+                return_value={
+                    "intent": "device",
+                    "action": {"mode": "open_app", "app": "notepad", "text": "open notepad"},
+                    "_routing": {"planner_source": "llm_intent_plan", "planner_reason": "ollama_json_plan"},
+                },
+            ),
+            mock.patch(
+                "main.execute_plan",
+                return_value={"reply": "Opening notepad.", "config_changed": False, "ok": True, "error_kind": ""},
+            ),
+            mock.patch("main.speak_reply"),
+        ):
+            request_id = main.begin_interruptible_request("voice", trigger_kind="voice_command")
+            reply = main.handle_user_text(
+                "open notepad",
+                source="voice",
+                request_id=request_id,
+                request_id_str="REQ-0099",
+                trigger_kind="voice_command",
+            )
+            self.assertEqual(reply, "Opening notepad.")
+
+        events = event_ledger.read_events(limit=20)
+        planned = [event for event in events if event.get("event_type") == "intent_planned"]
+        validated = [event for event in events if event.get("event_type") == "action_validated"]
+        self.assertTrue(planned)
+        self.assertEqual(planned[-1]["payload"]["routing"]["planner_source"], "llm_intent_plan")
+        self.assertTrue(validated)
+        self.assertEqual(validated[-1]["payload"]["verdict"], "auto_pass")
 
     def test_input_handler_concurrency_and_key_repeat(self):
         from input_handler import InputHandler
@@ -596,6 +671,51 @@ class AprilStressTests(unittest.TestCase):
             t.join()
 
         self.assertIn(handler.state, ["idle", "recording_hold", "continuous_recording"])
+
+    def test_native_hook_latches_altdown_from_event_flags(self):
+        import ctypes
+        import input_handler as ih
+
+        handler = ih.InputHandler(
+            surface=None,
+            config={
+                "copilot_hold_threshold": 0.1,
+                "copilot_double_tap_window": 0.2,
+                "copilot_min_audio_seconds": 0.05,
+            },
+        )
+        handler.recorder = mock.MagicMock()
+
+        original_async = ih.user32.GetAsyncKeyState
+        original_thread = ih.threading.Thread
+
+        class ImmediateThread:
+            def __init__(self, target=None, daemon=None):
+                self._target = target
+
+            def start(self):
+                if self._target:
+                    self._target()
+
+            def join(self, timeout=None):
+                return None
+
+        try:
+            ih.user32.GetAsyncKeyState = lambda vk: 0
+            ih.threading.Thread = ImmediateThread
+
+            hook = ih.NativeCopilotHook(handler)
+            event = ih.KBDLLHOOKSTRUCT()
+            event.vkCode = ih.VK_F23
+            event.flags = ih.LLKHF_ALTDOWN
+
+            hook._hook_proc(ih.HC_ACTION, ih.WM_KEYDOWN, ctypes.addressof(event))
+
+            self.assertEqual(handler._current_trigger_kind, "voice_dictation")
+            handler.recorder.start.assert_called_once()
+        finally:
+            ih.user32.GetAsyncKeyState = original_async
+            ih.threading.Thread = original_thread
 
 
 
@@ -709,4 +829,3 @@ class AprilStressTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
-

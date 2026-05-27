@@ -67,7 +67,9 @@ class BrainError(RuntimeError):
 def process(text: str, config: dict[str, Any]) -> dict[str, Any]:
     clean = apply_rewrites(text)
     if not clean:
-        return _conversation_plan("", "")
+        plan = _conversation_plan("", "")
+        plan["_routing"] = {"planner_source": "empty_input", "planner_reason": "rewriter_returned_empty"}
+        return plan
 
     # Capture enriched context for training data recording
     _state_context = get_prompt_context_summary(limit=int(config.get("state_context_timeline_limit", 6)))
@@ -85,6 +87,7 @@ def process(text: str, config: dict[str, Any]) -> dict[str, Any]:
             },
         }
         plan["_enriched_context"] = {"memory": _memory_context or "", "state": _state_context or ""}
+        plan["_routing"] = {"planner_source": "local_reply", "planner_reason": "handled_without_intent_planning"}
         return plan
 
     local_plan = _local_plan(clean, config)
@@ -95,6 +98,7 @@ def process(text: str, config: dict[str, Any]) -> dict[str, Any]:
     if _looks_like_conversation_question(clean):
         plan = _conversation_plan(clean, "")
         plan["_enriched_context"] = {"memory": _memory_context or "", "state": _state_context or ""}
+        plan["_routing"] = {"planner_source": "conversation_fallback", "planner_reason": "question_pattern"}
         return plan
 
     llm_plan = _ollama_intent_plan(clean, config)
@@ -104,6 +108,7 @@ def process(text: str, config: dict[str, Any]) -> dict[str, Any]:
 
     plan = _conversation_plan(clean, "")
     plan["_enriched_context"] = {"memory": _memory_context or "", "state": _state_context or ""}
+    plan["_routing"] = {"planner_source": "conversation_fallback", "planner_reason": "no_other_planner_matched"}
     return plan
 
 
@@ -293,6 +298,11 @@ def _local_plan(text: str, config: dict[str, Any]) -> dict[str, Any] | None:
     for tool in triggered_tools:
         plan = tool.match(text, lowered)
         if plan:
+            plan["_routing"] = {
+                "planner_source": "local_trigger_match",
+                "planner_reason": "matched_triggered_tool",
+                "tool": tool.intent_name,
+            }
             return plan
 
     for tool in intent_registry.tools():
@@ -302,16 +312,36 @@ def _local_plan(text: str, config: dict[str, Any]) -> dict[str, Any] | None:
             continue
         plan = tool.match(text, lowered)
         if plan:
+            plan["_routing"] = {
+                "planner_source": "local_tool_match",
+                "planner_reason": "matched_non_triggered_tool",
+                "tool": tool.intent_name,
+            }
             return plan
 
     learned_plan = intent_registry.semantic_plan(text)
     if learned_plan:
+        learned_plan.setdefault("_routing", {})
+        learned_plan["_routing"].update(
+            {
+                "planner_source": "registry_semantic_match",
+                "planner_reason": "matched_builtin_examples",
+            }
+        )
         return learned_plan
 
     # Dynamic semantic routing layer (checks past confirmed examples/history)
     threshold = float(config.get("semantic_routing_threshold", 0.74))
     dynamic_plan = semantic_store.semantic_plan(text, confidence_threshold=threshold)
     if dynamic_plan:
+        dynamic_plan.setdefault("_routing", {})
+        dynamic_plan["_routing"].update(
+            {
+                "planner_source": "semantic_store_replay",
+                "planner_reason": "matched_recorded_example",
+                "confidence_threshold": threshold,
+            }
+        )
         return dynamic_plan
 
     return None
@@ -367,10 +397,17 @@ def _ollama_intent_plan(text: str, config: dict[str, Any]) -> dict[str, Any] | N
     payload = _extract_json_object(content)
     if not isinstance(payload, dict):
         return None
-    return _normalize_plan(payload, text)
+    return _normalize_plan(
+        payload,
+        text,
+        route_meta={
+            "planner_source": "llm_intent_plan",
+            "planner_reason": "ollama_json_plan",
+            "raw_plan": payload,
+        },
+    )
 
-
-def _normalize_plan(payload: dict[str, Any], original_text: str) -> dict[str, Any]:
+def _normalize_plan(payload: dict[str, Any], original_text: str, route_meta: dict[str, Any] | None = None) -> dict[str, Any]:
     from intent import registry as intent_registry
 
     intent = str(payload.get("intent", "") or "").strip().lower()
@@ -380,14 +417,23 @@ def _normalize_plan(payload: dict[str, Any], original_text: str) -> dict[str, An
         action = {}
     action.setdefault("text", original_text)
     if intent_registry.get(intent) is None:
-        return _conversation_plan(original_text, "")
+        plan = _conversation_plan(original_text, "")
+        plan["_routing"] = {
+            "planner_source": "conversation_fallback",
+            "planner_reason": "unknown_intent_from_planner",
+            "raw_intent": intent,
+        }
+        return plan
     if intent == "conversation":
         action.setdefault("text", original_text)
-    return {
+    plan = {
         "intent": intent,
         "response_preview": response_preview,
         "action": action,
     }
+    if route_meta:
+        plan["_routing"] = dict(route_meta)
+    return plan
 
 
 def _conversation_plan(text: str, preview: str) -> dict[str, Any]:

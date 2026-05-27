@@ -46,6 +46,68 @@ def _format_request_id(request_id: int) -> str:
     return f"REQ-{request_id:04d}"
 
 
+def _normalize_trigger_kind(trigger_kind: str | None, *, is_dictation: bool = False) -> str:
+    candidate = str(trigger_kind or "").strip().lower()
+    if candidate in {"voice_command", "voice_dictation"}:
+        return candidate
+    return "voice_dictation" if is_dictation else "voice_command"
+
+
+def _routing_provenance(plan: dict[str, object]) -> dict[str, object]:
+    routing = plan.get("_routing") if isinstance(plan.get("_routing"), dict) else {}
+    return {
+        "planner_source": str(routing.get("planner_source", "") or "unknown").strip() or "unknown",
+        "planner_reason": str(routing.get("planner_reason", "") or "").strip(),
+        "tool": str(routing.get("tool", "") or "").strip(),
+        "confidence_threshold": routing.get("confidence_threshold"),
+        "semantic": plan.get("_semantic") if isinstance(plan.get("_semantic"), dict) else None,
+        "raw_plan": routing.get("raw_plan") if isinstance(routing.get("raw_plan"), dict) else None,
+    }
+
+
+def _classify_action_validation(
+    *,
+    trigger_kind: str,
+    planner_source: str,
+    plan: dict[str, object],
+    result: dict[str, object],
+) -> tuple[str, str]:
+    ok = bool(result.get("ok", False))
+    error_kind = str(result.get("error_kind", "") or "").strip()
+    reply = str(result.get("reply", "") or "").strip().lower()
+    if trigger_kind == "voice_dictation":
+        return "routing_misfire", "dictation_trigger_reached_command_router"
+    if ok:
+        return "auto_pass", "action_completed_without_runtime_error"
+    if planner_source in {"llm_intent_plan", "semantic_store_replay", "registry_semantic_match"}:
+        if "couldn't map" in reply or "cannot map" in reply:
+            return "misroute_intent", "planner_selected_unexecutable_action"
+        return "wrong_action", f"planner_source={planner_source}"
+    if error_kind:
+        return "execution_failed", error_kind
+    if not isinstance(plan.get("action"), dict) or not plan.get("action"):
+        return "not_intended", "missing_action_payload"
+    return "wrong_action", "execution_failed_without_specific_classifier"
+
+
+def record_action_validation(
+    request_id: int,
+    verdict: str,
+    *,
+    notes: str = "",
+    source: str = "user",
+    config: dict | None = None,
+) -> None:
+    record_state_event(
+        "action_validated",
+        source=source,
+        state="observed",
+        entity_id=f"request_{request_id}",
+        payload={"request_id": request_id, "verdict": str(verdict or "").strip(), "notes": str(notes or "").strip()},
+        config=config or load_config(),
+    )
+
+
 _job_id_lock = threading.Lock()
 _job_id_counter = 0
 
@@ -156,7 +218,7 @@ def record_state_event(
     refresh_state_snapshot(config=config)
 
 
-def begin_interruptible_request(source: str) -> int:
+def begin_interruptible_request(source: str, *, trigger_kind: str = "") -> int:
     """Register a new request for interrupt/staleness tracking.
 
     Returns an integer sequence number used by is_request_current().
@@ -185,14 +247,14 @@ def begin_interruptible_request(source: str) -> int:
         "request_begin",
         subsystem="input",
         request_id=_format_request_id(request_id),
-        payload={"source": source},
+        payload={"source": source, "trigger_kind": trigger_kind},
     )
     record_state_event(
         "request_started",
         source=source,
         state="started",
         entity_id=f"request_{request_id}",
-        payload={"source": source, "request_id": request_id},
+        payload={"source": source, "request_id": request_id, "trigger_kind": trigger_kind},
         config=load_config(),
     )
     return request_id
@@ -207,7 +269,14 @@ def is_request_current(request_id: int) -> bool:
         return request_id == _latest_request_id
 
 
-def handle_user_text(text: str, source: str = "text", request_id: int | None = None, request_id_str: str | None = None):
+def handle_user_text(
+    text: str,
+    source: str = "text",
+    request_id: int | None = None,
+    request_id_str: str | None = None,
+    *,
+    trigger_kind: str = "voice_command",
+):
     # Derive formatted request_id string if not passed explicitly (e.g. direct callers).
     if request_id_str is None and request_id is not None:
         request_id_str = _format_request_id(request_id)
@@ -217,7 +286,7 @@ def handle_user_text(text: str, source: str = "text", request_id: int | None = N
         "handle_user_text",
         subsystem="brain",
         request_id=request_id_str,
-        payload={"source": source, "text": text[:120]},
+        payload={"source": source, "text": text[:120], "trigger_kind": trigger_kind},
     )
     config = load_config()
     observation = collect_runtime_observation()
@@ -244,12 +313,18 @@ def handle_user_text(text: str, source: str = "text", request_id: int | None = N
             payload={"source": source, "text_len": len(text)},
         )
         plan = plan_with_brain(text, config)
+        provenance = _routing_provenance(plan)
         runtime_trace.trace_event(
             "intent_planned",
             subsystem="brain",
             request_id=request_id_str,
             job_id=brain_job_id,
-            payload={"intent": plan.get("intent"), "source": source},
+            payload={
+                "intent": plan.get("intent"),
+                "source": source,
+                "trigger_kind": trigger_kind,
+                "planner_source": provenance["planner_source"],
+            },
         )
         log_event(
             "intent_plan",
@@ -257,6 +332,8 @@ def handle_user_text(text: str, source: str = "text", request_id: int | None = N
             request_id=request_id,
             intent=plan.get("intent"),
             action=plan.get("action"),
+            trigger_kind=trigger_kind,
+            planner_source=provenance["planner_source"],
         )
         record_state_event(
             "intent_planned",
@@ -269,6 +346,8 @@ def handle_user_text(text: str, source: str = "text", request_id: int | None = N
                 "text": text,
                 "intent": plan.get("intent"),
                 "action": plan.get("action"),
+                "trigger_kind": trigger_kind,
+                "routing": provenance,
             },
             config=config,
         )
@@ -291,11 +370,19 @@ def handle_user_text(text: str, source: str = "text", request_id: int | None = N
                 "text": text,
                 "source": source,
                 "config_callback": on_config_change,
+                "trigger_kind": trigger_kind,
+                "routing_provenance": provenance,
             },
         )
         response = str(result.get("reply", "") or "").strip()
         ok = bool(result.get("ok", bool(response)))
         error_kind = str(result.get("error_kind", "") or "").strip()
+        validation_label, validation_detail = _classify_action_validation(
+            trigger_kind=trigger_kind,
+            planner_source=str(provenance["planner_source"]),
+            plan=plan,
+            result=result,
+        )
         log_event(
             "action_result",
             source=source,
@@ -304,6 +391,9 @@ def handle_user_text(text: str, source: str = "text", request_id: int | None = N
             ok=ok,
             reply=response,
             config_changed=bool(result.get("config_changed")),
+            trigger_kind=trigger_kind,
+            planner_source=provenance["planner_source"],
+            validation_label=validation_label,
         )
         record_state_event(
             "action_completed" if ok else "action_failed",
@@ -319,6 +409,24 @@ def handle_user_text(text: str, source: str = "text", request_id: int | None = N
                 "ok": ok,
                 "error_kind": error_kind,
                 "config_changed": bool(result.get("config_changed")),
+                "trigger_kind": trigger_kind,
+                "routing": provenance,
+                "validation_label": validation_label,
+                "validation_detail": validation_detail,
+            },
+            config=config,
+        )
+        record_state_event(
+            "action_validated",
+            source="system",
+            state="observed",
+            entity_id=f"request_{request_id}" if request_id is not None else None,
+            payload={
+                "request_id": request_id,
+                "trigger_kind": trigger_kind,
+                "planner_source": provenance["planner_source"],
+                "verdict": validation_label,
+                "detail": validation_detail,
             },
             config=config,
         )
@@ -371,10 +479,14 @@ def handle_user_text(text: str, source: str = "text", request_id: int | None = N
                 "ok": ok,
                 "error_kind": error_kind,
                 "config_changed": bool(result.get("config_changed")),
+                "trigger_kind": trigger_kind,
+                "planner_source": provenance["planner_source"],
+                "validation_detail": validation_detail,
             },
             session_id=_session_id,
             system_prompt_hash=_system_prompt_hash,
             enriched_context=_enriched_str.strip(),
+            validation_label=validation_label,
         )
         if response:
             print(f"[main] assistant response: {response}")
@@ -509,30 +621,50 @@ def _post_process_dictation(text: str) -> str:
     return text.strip()
 
 
-def on_audio_captured(audio_bytes: bytes, duration: float, request_id_str: str | None = None, is_dictation: bool = False):
+def on_audio_captured(
+    audio_bytes: bytes,
+    duration: float,
+    request_id_str: str | None = None,
+    is_dictation: bool = False,
+    trigger_kind: str | None = None,
+):
     # begin_interruptible_request handles interrupt/staleness tracking.
     # The canonical request_id_str comes from input_handler (born at key press);
     # we do NOT format a second REQ-NNNN from the integer here.
-    request_id = begin_interruptible_request("voice")
+    trigger_kind = _normalize_trigger_kind(trigger_kind, is_dictation=is_dictation)
+    is_dictation = trigger_kind == "voice_dictation"
+    request_source = "dictation" if is_dictation else "voice"
+    request_id = begin_interruptible_request(request_source, trigger_kind=trigger_kind)
     if request_id_str is None:
         # Defensive fallback: should not occur in normal operation.
         request_id_str = _format_request_id(request_id)
     size_kb = len(audio_bytes) / 1024
     print(f"[main] audio captured: {duration:.2f}s, {size_kb:.1f} KiB WAV")
-    log_event("audio_captured", duration=duration, size_kb=round(size_kb, 1), request_id=request_id)
+    log_event("audio_captured", duration=duration, size_kb=round(size_kb, 1), request_id=request_id, trigger_kind=trigger_kind)
     runtime_trace.trace_event(
         "audio_captured",
         subsystem="input",
         request_id=request_id_str,
-        payload={"duration": round(duration, 3), "size_kb": round(size_kb, 1), "is_dictation": is_dictation},
+        payload={
+            "duration": round(duration, 3),
+            "size_kb": round(size_kb, 1),
+            "is_dictation": is_dictation,
+            "trigger_kind": trigger_kind,
+        },
     )
     config = load_config()
     record_state_event(
         "audio_captured",
-        source="voice",
+        source=request_source,
         state="completed",
         entity_id=f"request_{request_id}",
-        payload={"request_id": request_id, "duration": duration, "size_kb": round(size_kb, 1), "is_dictation": is_dictation},
+        payload={
+            "request_id": request_id,
+            "duration": duration,
+            "size_kb": round(size_kb, 1),
+            "is_dictation": is_dictation,
+            "trigger_kind": trigger_kind,
+        },
         config=config,
     )
     if _bridge_ref is not None:
@@ -573,7 +705,7 @@ def on_audio_captured(audio_bytes: bytes, duration: float, request_id_str: str |
         return "I captured that, but transcription failed unexpectedly."
     if not transcript.strip():
         print("[main] transcription unavailable")
-        log_event("transcription_unavailable", request_id=request_id, **stt_meta)
+        log_event("transcription_unavailable", request_id=request_id, trigger_kind=trigger_kind, **stt_meta)
         runtime_trace.trace_event(
             "transcript_unavailable",
             subsystem="stt",
@@ -584,10 +716,10 @@ def on_audio_captured(audio_bytes: bytes, duration: float, request_id_str: str |
         )
         record_state_event(
             "transcript_unavailable",
-            source="voice",
+            source=request_source,
             state="failed",
             entity_id=f"request_{request_id}",
-            payload={"request_id": request_id, **stt_meta},
+            payload={"request_id": request_id, "trigger_kind": trigger_kind, **stt_meta},
             config=config,
         )
         if _bridge_ref is not None:
@@ -596,7 +728,7 @@ def on_audio_captured(audio_bytes: bytes, duration: float, request_id_str: str |
         return "I captured that, but I couldn't transcribe it."
 
     print(f"[main] transcript: {transcript}")
-    log_event("transcript", transcript=transcript, request_id=request_id, **stt_meta)
+    log_event("transcript", transcript=transcript, request_id=request_id, trigger_kind=trigger_kind, **stt_meta)
     runtime_trace.trace_event(
         "transcript_received",
         subsystem="stt",
@@ -606,10 +738,10 @@ def on_audio_captured(audio_bytes: bytes, duration: float, request_id_str: str |
     )
     record_state_event(
         "transcript_received",
-        source="voice",
+        source=request_source,
         state="completed",
         entity_id=f"request_{request_id}",
-        payload={"request_id": request_id, "transcript": transcript, **stt_meta},
+        payload={"request_id": request_id, "transcript": transcript, "trigger_kind": trigger_kind, **stt_meta},
         config=config,
     )
 
@@ -634,7 +766,20 @@ def on_audio_captured(audio_bytes: bytes, duration: float, request_id_str: str |
             "dictation_completed",
             subsystem="input",
             request_id=request_id_str,
-            payload={"raw_len": len(transcript), "clean_len": len(cleaned)},
+            payload={"raw_len": len(transcript), "clean_len": len(cleaned), "trigger_kind": trigger_kind},
+        )
+        record_state_event(
+            "action_validated",
+            source="system",
+            state="observed",
+            entity_id=f"request_{request_id}",
+            payload={
+                "request_id": request_id,
+                "trigger_kind": trigger_kind,
+                "verdict": "confirmed_correct" if cleaned else "execution_failed",
+                "detail": "dictation_bypassed_router" if cleaned else "dictation_output_empty",
+            },
+            config=config,
         )
         if _bridge_ref is not None:
             _bridge_ref.set_state("idle", request_id=request_id_str)
@@ -645,7 +790,13 @@ def on_audio_captured(audio_bytes: bytes, duration: float, request_id_str: str |
     if _bridge_ref is not None:
         _bridge_ref.set_transcript(transcript)
 
-    return handle_user_text(transcript, source="voice", request_id=request_id, request_id_str=request_id_str)
+    return handle_user_text(
+        transcript,
+        source=request_source,
+        request_id=request_id,
+        request_id_str=request_id_str,
+        trigger_kind=trigger_kind,
+    )
 
 
 def acquire_single_instance() -> bool:

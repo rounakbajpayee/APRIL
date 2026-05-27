@@ -32,6 +32,8 @@ WM_SYSKEYDOWN = 0x0104
 WM_SYSKEYUP = 0x0105
 WM_QUIT = 0x0012
 VK_F23 = 0x86
+LLKHF_INJECTED = 0x10
+LLKHF_ALTDOWN = 0x20
 
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
@@ -262,7 +264,6 @@ class NativeCopilotHook:
     def _hook_proc(self, n_code, w_param, l_param):
         if n_code == HC_ACTION:
             event = ctypes.cast(l_param, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
-            LLKHF_INJECTED = 0x10
             if event.vkCode == VK_F23:
                 # Filter injected events: the Copilot key fires a synthetic
                 # injected event (LLKHF_INJECTED, flags bit 4 = 0x10) before
@@ -271,12 +272,16 @@ class NativeCopilotHook:
                 if event.flags & LLKHF_INJECTED:
                     return 1  # suppress but do not dispatch
                 if w_param in (WM_KEYDOWN, WM_SYSKEYDOWN):
+                    trigger_kind = "voice_dictation" if (event.flags & LLKHF_ALTDOWN) else "voice_command"
                     # Send F24 keydown/keyup to break the Ctrl+Alt+Shift+Win (Office key) combination
                     # so that Windows does not open Microsoft 365 / Copilot 365 on key release.
                     # 0x87 is VK_F24, 2 is KEYEVENTF_KEYUP.
                     user32.keybd_event(0x87, 0, 0, None)
                     user32.keybd_event(0x87, 0, 2, None)
-                    threading.Thread(target=self.handler._handle_trigger_press, daemon=True).start()
+                    threading.Thread(
+                        target=lambda: self.handler._handle_trigger_press(trigger_kind=trigger_kind),
+                        daemon=True,
+                    ).start()
                 elif w_param in (WM_KEYUP, WM_SYSKEYUP):
                     threading.Thread(target=self.handler._handle_trigger_release, daemon=True).start()
                 return 1
@@ -315,7 +320,7 @@ class InputHandler:
         # Set at key-press (interaction birth); cleared when interaction ends.
         # Explicit field—no global/contextvar magic.
         self._current_request_id: str | None = None
-        self._current_is_dictation = False
+        self._current_trigger_kind = "voice_command"
 
     def _update_surface_state(self, state: str, *args, request_id: str | None = None, **kwargs) -> None:
         """Notify the runtime state sink of a state transition.
@@ -327,6 +332,10 @@ class InputHandler:
         """
         if self._surface is not None:
             self._surface.set_state(state, request_id=request_id)
+
+    def _detect_trigger_kind(self) -> str:
+        is_alt = bool(user32.GetAsyncKeyState(0x12) & 0x8000)
+        return "voice_dictation" if is_alt else "voice_command"
 
     def _disable_office_launcher(self):
         try:
@@ -413,7 +422,7 @@ class InputHandler:
             return
         self._handle_trigger_release()
 
-    def _handle_trigger_press(self):
+    def _handle_trigger_press(self, *, trigger_kind: str | None = None):
         trace_startup(f"_handle_trigger_press entry state={self.state} trigger_down={self.trigger_down}")
         
         stop_needed = False
@@ -441,12 +450,12 @@ class InputHandler:
                 return
 
         request_id = _generate_request_id()
-        is_alt = bool(user32.GetAsyncKeyState(0x12) & 0x8000)
-        
+        trigger_kind = trigger_kind or self._detect_trigger_kind()
+
         with self._lock:
             self.trigger_down = True
             self._current_request_id = request_id
-            self._current_is_dictation = is_alt
+            self._current_trigger_kind = trigger_kind
             self.f23_down_time = time.monotonic()
             self.state = "recording_hold"
 
@@ -454,7 +463,7 @@ class InputHandler:
             "interaction_begin",
             subsystem="input",
             request_id=request_id,
-            payload={"trigger": "hotkey", "is_dictation": is_alt},
+            payload={"trigger": "hotkey", "trigger_kind": trigger_kind, "is_dictation": trigger_kind == "voice_dictation"},
         )
         if self.on_interrupt:
             try:
@@ -501,14 +510,15 @@ class InputHandler:
             still_active = (self._current_request_id == request_id)
 
         if still_active:
-            state_to_push = "dictating" if is_alt else "listening"
-            trace_startup(f"_handle_trigger_press recorder started; state=recording_hold is_dictation={is_alt}")
+            state_to_push = "dictating" if trigger_kind == "voice_dictation" else "listening"
+            trace_startup(f"_handle_trigger_press recorder started; state=recording_hold trigger_kind={trigger_kind}")
             runtime_trace.trace_event(
                 "surface_state_push",
                 subsystem="input",
                 request_id=request_id,
                 payload={
                     "state": state_to_push,
+                    "trigger_kind": trigger_kind,
                     "surface_type": type(self._surface).__name__,
                 },
             )
@@ -562,7 +572,10 @@ class InputHandler:
                 send_audio = True
 
         if request_id_to_update:
-            self._update_surface_state("listening", request_id=request_id_to_update)
+            with self._lock:
+                current_trigger_kind = self._current_trigger_kind
+            state_to_push = "dictating" if current_trigger_kind == "voice_dictation" else "listening"
+            self._update_surface_state(state_to_push, request_id=request_id_to_update)
         elif call_stop:
             self._stop_recording(send=send_audio)
 
@@ -571,12 +584,12 @@ class InputHandler:
         
         with self._lock:
             request_id = self._current_request_id
-            is_dictation = self._current_is_dictation
+            trigger_kind = self._current_trigger_kind
             self.state = "idle"
             self.f23_down_time = None
             self.trigger_down = False
             self._current_request_id = None
-            self._current_is_dictation = False
+            self._current_trigger_kind = "voice_command"
             
         audio_bytes, duration = self.recorder.stop()
         
@@ -610,36 +623,37 @@ class InputHandler:
             "audio_dispatch",
             subsystem="input",
             request_id=request_id,
-            payload={"duration": round(duration, 3), "bytes": len(audio_bytes)},
+            payload={"duration": round(duration, 3), "bytes": len(audio_bytes), "trigger_kind": trigger_kind},
         )
-        self._dispatch_audio(audio_bytes, duration, request_id=request_id, is_dictation=is_dictation)
+        self._dispatch_audio(audio_bytes, duration, request_id=request_id, trigger_kind=trigger_kind)
 
-    def _dispatch_audio(self, audio_bytes, duration, *, request_id: str | None = None, is_dictation: bool = False):
+    def _dispatch_audio(self, audio_bytes, duration, *, request_id: str | None = None, trigger_kind: str = "voice_command"):
         def run_pipeline():
-            runtime_trace.trace_event(
-                "surface_state_push",
-                subsystem="input",
-                request_id=request_id,
-                payload={"state": "thinking", "thread": "pipeline"},
-            )
-            try:
-                self._update_surface_state("thinking", request_id=request_id)
-            except Exception as _exc:
-                import traceback as _tb
+            if trigger_kind != "voice_dictation":
                 runtime_trace.trace_event(
-                    "surface_state_push_error",
+                    "surface_state_push",
                     subsystem="input",
-                    severity=runtime_trace.ERROR,
                     request_id=request_id,
-                    payload={"state": "thinking", "error": str(_exc)},
+                    payload={"state": "thinking", "thread": "pipeline", "trigger_kind": trigger_kind},
                 )
-                trace_startup("surface_state_push EXCEPTION (thinking)\n" + _tb.format_exc())
-                raise
+                try:
+                    self._update_surface_state("thinking", request_id=request_id)
+                except Exception as _exc:
+                    import traceback as _tb
+                    runtime_trace.trace_event(
+                        "surface_state_push_error",
+                        subsystem="input",
+                        severity=runtime_trace.ERROR,
+                        request_id=request_id,
+                        payload={"state": "thinking", "error": str(_exc)},
+                    )
+                    trace_startup("surface_state_push EXCEPTION (thinking)\n" + _tb.format_exc())
+                    raise
             if self.on_audio:
                 try:
                     # Phase 2B: pass request_id explicitly so main.py uses
                     # the single canonical ID born at the hardware boundary.
-                    self.on_audio(audio_bytes, duration, request_id, is_dictation=is_dictation)
+                    self.on_audio(audio_bytes, duration, request_id, trigger_kind=trigger_kind)
                 except Exception as exc:
                     self._update_surface_state("error", f"audio pipeline failed: {exc}", request_id=request_id)
                     runtime_trace.trace_event(

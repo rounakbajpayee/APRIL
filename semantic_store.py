@@ -62,6 +62,7 @@ def record_semantic_example(
     session_id: str = "",
     system_prompt_hash: str = "",
     enriched_context: str = "",
+    validation_label: str = "",
 ) -> dict[str, Any]:
     clean_text = _normalize_text(text)
     record = {
@@ -82,6 +83,7 @@ def record_semantic_example(
         "session_id": _clean_field(session_id),
         "system_prompt_hash": _clean_field(system_prompt_hash),
         "enriched_context": _clean_field(enriched_context),
+        "validation_label": _clean_field(validation_label),
     }
 
     STATE_DIR.mkdir(parents=True, exist_ok=True)
@@ -111,6 +113,7 @@ def record_semantic_example(
             "subject_ref": record["subject_ref"],
             "confidence": record["confidence"],
             "outcome": record["outcome"],
+            "validation_label": record["validation_label"],
         },
     )
     return record
@@ -149,6 +152,11 @@ def semantic_plan(text: str, *, kind: str = "", confidence_threshold: float = 0.
     record = best.get("record") if isinstance(best.get("record"), dict) else {}
     if score < confidence_threshold:
         return None
+    if str(record.get("outcome", "") or "").strip().lower() != "success":
+        return None
+    validation_label = str(record.get("validation_label", "") or "").strip().lower()
+    if validation_label and validation_label not in {"auto_pass", "confirmed_correct"}:
+        return None
 
     intent = str(record.get("resolved_intent", "") or "").strip().lower()
     action = record.get("action") if isinstance(record.get("action"), dict) else {}
@@ -169,6 +177,7 @@ def semantic_plan(text: str, *, kind: str = "", confidence_threshold: float = 0.
             "kind": record.get("kind", ""),
             "subject_type": record.get("subject_type", ""),
             "subject_ref": record.get("subject_ref", ""),
+            "validation_label": record.get("validation_label", ""),
         },
     }
 
@@ -227,6 +236,7 @@ def _normalize_record(payload: dict[str, Any]) -> dict[str, Any]:
         "session_id": _clean_field(payload.get("session_id", "")),
         "system_prompt_hash": _clean_field(payload.get("system_prompt_hash", "")),
         "enriched_context": _clean_field(payload.get("enriched_context", "")),
+        "validation_label": _clean_field(payload.get("validation_label", "")),
     }
 
 
