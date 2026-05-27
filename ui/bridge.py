@@ -49,6 +49,7 @@ _STATE_MAP: dict[str, APRILState] = {
     "processing":  APRILState.THINKING,
     "speaking":    APRILState.SPEAKING,
     "acting":      APRILState.ACTING,
+    "dictating":   APRILState.ACTING,
     "warning":     APRILState.WARNING,
     "error":       APRILState.ERROR,
 }

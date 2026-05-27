@@ -501,6 +501,21 @@ class AprilStressTests(unittest.TestCase):
         self.assertEqual(plan["action"].get("mode"), "command")
         self.assertEqual(plan["action"].get("command"), "backup_db.bat")
 
+    def test_dictation_mode_types_text(self):
+        from main import _post_process_dictation
+        raw = "Hello dictation mode period Um, this is a test new line and we we are recording"
+        cleaned = _post_process_dictation(raw)
+        self.assertEqual(cleaned, "Hello dictation mode. This is a test\nand we are recording")
+
+        mock_controller = mock.MagicMock()
+        with (
+            mock.patch("main.transcribe_with_metadata", return_value=(raw, {"stt_source": "remote"})),
+            mock.patch("pynput.keyboard.Controller", return_value=mock_controller),
+        ):
+            res = main.on_audio_captured(b"fake audio", 1.5, is_dictation=True)
+            self.assertEqual(res, "Hello dictation mode. This is a test\nand we are recording")
+            mock_controller.type.assert_called_once_with("Hello dictation mode. This is a test\nand we are recording")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

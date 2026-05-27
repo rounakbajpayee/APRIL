@@ -418,7 +418,47 @@ def on_text_submit(text: str):
     return handle_user_text(text, source="text", request_id=request_id, request_id_str=req_id_str)
 
 
-def on_audio_captured(audio_bytes: bytes, duration: float, request_id_str: str | None = None):
+def _post_process_dictation(text: str) -> str:
+    """Clean stutters, filler words, format spoken punctuation, and fix spacing."""
+    if not text:
+        return ""
+    import re
+    # 1. Clean common filler words
+    fillers = ["um", "uh", "ah", "er", "eh"]
+    for f in fillers:
+        text = re.sub(r'\b' + f + r'\b[,.]?', '', text, flags=re.IGNORECASE)
+
+    # 2. Spoken Punctuation mapping
+    punctuation_map = [
+        ("new paragraph", "\n\n"),
+        ("new line", "\n"),
+        ("exclamation point", "!"),
+        ("exclamation mark", "!"),
+        ("question mark", "?"),
+        ("full stop", "."),
+        ("period", "."),
+        ("comma", ","),
+        ("colon", ":"),
+        ("semicolon", ";"),
+    ]
+    for spoken, symbol in punctuation_map:
+        text = re.sub(r'\b' + spoken + r'\b', symbol, text, flags=re.IGNORECASE)
+
+    # 3. Clean up stutters (duplicate consecutive identical words)
+    text = re.sub(r'\b(\w+)\s+\1\b', r'\1', text, flags=re.IGNORECASE)
+
+    # 4. Clean spacing around newlines, collapse spaces, and remove spaces before punctuation
+    text = re.sub(r'[ \t]*\n[ \t]*', '\n', text)
+    text = re.sub(r'\s+([.,?!:;])', r'\1', text)
+    text = re.sub(r'[ \t]+', ' ', text)
+
+    # 5. Capitalize sentences
+    text = re.sub(r'^([a-z])', lambda m: m.group(1).upper(), text)
+    text = re.sub(r'([.?!]\s+)([a-z])', lambda m: m.group(1) + m.group(2).upper(), text)
+    return text.strip()
+
+
+def on_audio_captured(audio_bytes: bytes, duration: float, request_id_str: str | None = None, is_dictation: bool = False):
     # begin_interruptible_request handles interrupt/staleness tracking.
     # The canonical request_id_str comes from input_handler (born at key press);
     # we do NOT format a second REQ-NNNN from the integer here.
@@ -433,7 +473,7 @@ def on_audio_captured(audio_bytes: bytes, duration: float, request_id_str: str |
         "audio_captured",
         subsystem="input",
         request_id=request_id_str,
-        payload={"duration": round(duration, 3), "size_kb": round(size_kb, 1)},
+        payload={"duration": round(duration, 3), "size_kb": round(size_kb, 1), "is_dictation": is_dictation},
     )
     config = load_config()
     record_state_event(
@@ -441,12 +481,13 @@ def on_audio_captured(audio_bytes: bytes, duration: float, request_id_str: str |
         source="voice",
         state="completed",
         entity_id=f"request_{request_id}",
-        payload={"request_id": request_id, "duration": duration, "size_kb": round(size_kb, 1)},
+        payload={"request_id": request_id, "duration": duration, "size_kb": round(size_kb, 1), "is_dictation": is_dictation},
         config=config,
     )
     if _bridge_ref is not None:
-        _bridge_ref.set_state("listening", request_id=request_id_str)
-        _bridge_ref.set_task("Listening…")
+        state_to_push = "dictating" if is_dictation else "listening"
+        _bridge_ref.set_state(state_to_push, request_id=request_id_str)
+        _bridge_ref.set_task("Dictating…" if is_dictation else "Listening…")
 
     stt_job_id = _format_job_id("STT")
     runtime_trace.trace_event(
@@ -498,6 +539,29 @@ def on_audio_captured(audio_bytes: bytes, duration: float, request_id_str: str |
         payload={"request_id": request_id, "transcript": transcript, **stt_meta},
         config=config,
     )
+
+    if is_dictation:
+        cleaned = _post_process_dictation(transcript)
+        print(f"[main] dictation output: {cleaned}")
+        if cleaned:
+            try:
+                from pynput.keyboard import Controller
+                keyboard = Controller()
+                keyboard.type(cleaned)
+            except Exception as e:
+                print(f"[main] dictation keyboard type failed: {e}")
+        runtime_trace.trace_event(
+            "dictation_completed",
+            subsystem="input",
+            request_id=request_id_str,
+            payload={"raw_len": len(transcript), "clean_len": len(cleaned)},
+        )
+        if _bridge_ref is not None:
+            _bridge_ref.set_state("idle", request_id=request_id_str)
+            _bridge_ref.set_task("")
+            _bridge_ref.append_log(f"dictated: {cleaned[:120]}")
+        return cleaned
+
     if _bridge_ref is not None:
         _bridge_ref.set_transcript(transcript)
 

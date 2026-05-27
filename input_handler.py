@@ -298,6 +298,7 @@ class InputHandler:
         # Set at key-press (interaction birth); cleared when interaction ends.
         # Explicit field—no global/contextvar magic.
         self._current_request_id: str | None = None
+        self._current_is_dictation = False
 
     def _update_surface_state(self, state: str, *args, request_id: str | None = None, **kwargs) -> None:
         """Notify the runtime state sink of a state transition.
@@ -381,11 +382,14 @@ class InputHandler:
             # Phase 2B: generate request_id at the interaction boundary.
             self._current_request_id = _generate_request_id()
             request_id = self._current_request_id
+            # Phase 2: detect Alt key hold (0x12 is VK_MENU)
+            is_alt = bool(user32.GetAsyncKeyState(0x12) & 0x8000)
+            self._current_is_dictation = is_alt
             runtime_trace.trace_event(
                 "interaction_begin",
                 subsystem="input",
                 request_id=request_id,
-                payload={"trigger": "hotkey"},
+                payload={"trigger": "hotkey", "is_dictation": self._current_is_dictation},
             )
             if self.on_interrupt:
                 try:
@@ -421,19 +425,19 @@ class InputHandler:
                 )
                 self._update_surface_state("error", f"mic failed: {exc}")
                 return
-            self.state = "recording_hold"
-            trace_startup("_handle_trigger_press recorder started; state=recording_hold")
+            state_to_push = "dictating" if self._current_is_dictation else "listening"
+            trace_startup(f"_handle_trigger_press recorder started; state=recording_hold is_dictation={self._current_is_dictation}")
             runtime_trace.trace_event(
                 "surface_state_push",
                 subsystem="input",
                 request_id=request_id,
                 payload={
-                    "state": "listening",
+                    "state": state_to_push,
                     "surface_type": type(self._surface).__name__,
                 },
             )
             try:
-                self._update_surface_state("listening", request_id=request_id)
+                self._update_surface_state(state_to_push, request_id=request_id)
             except Exception as _exc:
                 import traceback as _tb
                 runtime_trace.trace_event(
@@ -441,9 +445,9 @@ class InputHandler:
                     subsystem="input",
                     severity=runtime_trace.ERROR,
                     request_id=request_id,
-                    payload={"state": "listening", "error": str(_exc)},
+                    payload={"state": state_to_push, "error": str(_exc)},
                 )
-                trace_startup("surface_state_push EXCEPTION (listening)\n" + _tb.format_exc())
+                trace_startup(f"surface_state_push EXCEPTION ({state_to_push})\n" + _tb.format_exc())
                 raise
 
     def _handle_trigger_release(self):
@@ -493,6 +497,7 @@ class InputHandler:
                 payload={"send": send, "duration": round(duration, 3)},
             )
             self._current_request_id = None
+            self._current_is_dictation = False
             try:
                 self._update_surface_state("idle", request_id=request_id)
             except Exception as _exc:
@@ -514,12 +519,13 @@ class InputHandler:
             request_id=request_id,
             payload={"duration": round(duration, 3), "bytes": len(audio_bytes)},
         )
-        self._dispatch_audio(audio_bytes, duration, request_id=request_id)
+        self._dispatch_audio(audio_bytes, duration, request_id=request_id, is_dictation=self._current_is_dictation)
         # Phase 2B: clear after handing off to pipeline.
         # The request_id is now owned by on_audio's callee (main.py).
         self._current_request_id = None
+        self._current_is_dictation = False
 
-    def _dispatch_audio(self, audio_bytes, duration, *, request_id: str | None = None):
+    def _dispatch_audio(self, audio_bytes, duration, *, request_id: str | None = None, is_dictation: bool = False):
         def run_pipeline():
             runtime_trace.trace_event(
                 "surface_state_push",
@@ -544,7 +550,7 @@ class InputHandler:
                 try:
                     # Phase 2B: pass request_id explicitly so main.py uses
                     # the single canonical ID born at the hardware boundary.
-                    self.on_audio(audio_bytes, duration, request_id)
+                    self.on_audio(audio_bytes, duration, request_id, is_dictation=is_dictation)
                 except Exception as exc:
                     self._update_surface_state("error", f"audio pipeline failed: {exc}", request_id=request_id)
                     runtime_trace.trace_event(
