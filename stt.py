@@ -57,7 +57,14 @@ def transcribe_with_metadata(audio_bytes: bytes, config: dict[str, Any]) -> tupl
         last_meta = _resolve_transcription_meta(source, config)
         try:
             text = attempt()
-        except Exception:
+        except Exception as exc:
+            import runtime_trace
+            runtime_trace.trace_event(
+                "stt_attempt_error",
+                subsystem="stt",
+                severity=runtime_trace.WARNING,
+                payload={"source": source, "error": str(exc)},
+            )
             continue
         if text.strip():
             global _LAST_TRANSCRIPTION_META
