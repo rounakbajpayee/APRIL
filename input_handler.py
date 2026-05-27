@@ -328,9 +328,39 @@ class InputHandler:
         if self._surface is not None:
             self._surface.set_state(state, request_id=request_id)
 
+    def _disable_office_launcher(self):
+        try:
+            import winreg
+            key_path = r"Software\Classes\ms-officeapp\Shell\Open\Command"
+            key = winreg.CreateKey(winreg.HKEY_CURRENT_USER, key_path)
+            winreg.SetValueEx(key, "", 0, winreg.REG_SZ, "rundll32")
+            winreg.CloseKey(key)
+            trace_startup("disabled Office launcher via registry override")
+        except Exception as e:
+            trace_startup(f"failed to disable Office launcher: {e}")
+
+    def _restore_office_launcher(self):
+        try:
+            import winreg
+            key_path = r"Software\Classes\ms-officeapp\Shell\Open\Command"
+            winreg.DeleteKey(winreg.HKEY_CURRENT_USER, key_path)
+            # Try to clean up parent keys if they are empty
+            try:
+                winreg.DeleteKey(winreg.HKEY_CURRENT_USER, r"Software\Classes\ms-officeapp\Shell\Open")
+                winreg.DeleteKey(winreg.HKEY_CURRENT_USER, r"Software\Classes\ms-officeapp\Shell")
+                winreg.DeleteKey(winreg.HKEY_CURRENT_USER, r"Software\Classes\ms-officeapp")
+            except Exception:
+                pass
+            trace_startup("restored Office launcher registry keys")
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            trace_startup(f"failed to restore Office launcher: {e}")
+
     def start(self):
         trace_startup(f"InputHandler.start suppress_copilot={bool(self.config.get('suppress_copilot', True))}")
         if bool(self.config.get("suppress_copilot", True)):
+            self._disable_office_launcher()
             try:
                 self.native_hook = NativeCopilotHook(self)
                 if self.native_hook.start():
@@ -362,6 +392,8 @@ class InputHandler:
         if self.native_hook:
             self.native_hook.stop()
             self.native_hook = None
+        if bool(self.config.get("suppress_copilot", True)):
+            self._restore_office_launcher()
         if self.listener:
             self.listener.stop()
             self.listener = None
