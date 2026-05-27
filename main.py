@@ -34,6 +34,7 @@ _latest_request_id = 0
 _bridge_ref = None          # APRILBridge | None
 _session_id = uuid4().hex
 _system_prompt_hash = ""
+_input_handler_ref = None
 
 
 def _format_request_id(request_id: int) -> str:
@@ -580,6 +581,8 @@ def _post_process_dictation(text: str) -> str:
     if not text:
         return ""
     import re
+    # Convert Whisper's automatic segment newlines to spaces first
+    text = text.replace("\r\n", " ").replace("\n", " ")
     # 1. Clean common filler words
     fillers = ["um", "uh", "ah", "er", "eh"]
     for f in fillers:
@@ -749,19 +752,96 @@ def on_audio_captured(
         cleaned = _post_process_dictation(transcript)
         print(f"[main] dictation output: {cleaned}")
         if cleaned:
-            try:
-                from pynput.keyboard import Controller
-                keyboard = Controller()
-                keyboard.type(cleaned)
-            except Exception as e:
-                print(f"[main] dictation keyboard type failed: {e}")
+            if _input_handler_ref is not None:
+                _input_handler_ref.is_pasting = True
                 runtime_trace.trace_event(
-                    "dictation_type_error",
+                    "dictation_paste_start",
                     subsystem="input",
-                    severity=runtime_trace.ERROR,
+                    severity=runtime_trace.DEBUG,
                     request_id=request_id_str,
-                    payload={"error": str(e)},
                 )
+            else:
+                runtime_trace.trace_event(
+                    "dictation_paste_missing_handler",
+                    subsystem="input",
+                    severity=runtime_trace.WARNING,
+                    request_id=request_id_str,
+                )
+            try:
+                try:
+                    import time
+                    import pyperclip
+                    from pynput.keyboard import Controller, Key
+                    keyboard = Controller()
+                    
+                    # 1. Cooldown to wait for Copilot key modifiers (Ctrl+Alt+Shift+Win) to physically clear
+                    time.sleep(0.2)
+                    
+                    # 2. Flush OS modifier states in case they are stuck in the event queue
+                    keyboard.release(Key.ctrl)
+                    keyboard.release(Key.alt)
+                    keyboard.release(Key.shift)
+                    keyboard.release(Key.cmd)  # Win key
+                    time.sleep(0.02)
+                    
+                    # 3. Backup user's current clipboard
+                    old_clipboard = pyperclip.paste()
+                    
+                    # 4. Split and paste line-by-line using Shift+Enter to prevent message submission
+                    lines = cleaned.split('\n')
+                    for idx, line in enumerate(lines):
+                        if idx > 0:
+                            with keyboard.pressed(Key.shift):
+                                keyboard.press(Key.enter)
+                                keyboard.release(Key.enter)
+                            time.sleep(0.05)
+                        
+                        if line:
+                            pyperclip.copy(line)
+                            time.sleep(0.05)  # wait for clipboard to update
+                            
+                            with keyboard.pressed(Key.ctrl):
+                                keyboard.press('v')
+                                keyboard.release('v')
+                            time.sleep(0.1)  # wait for paste to complete
+                    
+                    # 5. Restore the user's old clipboard
+                    time.sleep(0.1)
+                    pyperclip.copy(old_clipboard)
+                    
+                except Exception as e:
+                    # Ultimate Fallback: Slow character-by-character typing if the clipboard fails
+                    print(f"[main] clipboard paste failed ({e}), falling back to slow typing")
+                    try:
+                        from pynput.keyboard import Controller, Key
+                        import time
+                        keyboard = Controller()
+                        for char in cleaned:
+                            if char == '\n':
+                                with keyboard.pressed(Key.shift):
+                                    keyboard.press(Key.enter)
+                                    keyboard.release(Key.enter)
+                            else:
+                                keyboard.type(char)
+                            time.sleep(0.015)
+                    except Exception as e2:
+                        print(f"[main] dictation fallback typing failed: {e2}")
+                        runtime_trace.trace_event(
+                            "dictation_type_error",
+                            subsystem="input",
+                            severity=runtime_trace.ERROR,
+                            request_id=request_id_str,
+                            payload={"error": str(e2)},
+                        )
+            finally:
+                if _input_handler_ref is not None:
+                    _input_handler_ref.is_pasting = False
+                    runtime_trace.trace_event(
+                        "dictation_paste_end",
+                        subsystem="input",
+                        severity=runtime_trace.DEBUG,
+                        request_id=request_id_str,
+                    )
         runtime_trace.trace_event(
             "dictation_completed",
             subsystem="input",
@@ -869,12 +949,14 @@ def main():
 
     # APRILBridge.set_state(str) satisfies the RuntimeStateSink protocol directly.
     # No shim required.
+    global _input_handler_ref
     input_handler = start_input_handler(
         bridge,
         config,
         on_audio=on_audio_captured,
         on_interrupt=interrupt_current_request,
     )
+    _input_handler_ref = input_handler
     trace_startup(f"input_handler started type={type(input_handler).__name__}")
 
     try:

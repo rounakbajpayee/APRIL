@@ -338,8 +338,23 @@ class NativeCopilotHook:
             elif event.flags & LLKHF_INJECTED:
                 # Suppress injected modifiers (Win, Shift, Ctrl) to prevent MS Copilot 365 / Office app launcher from opening
                 # (0x5B/0x5C: LWIN/RWIN, 0xA0/0xA1: LSHIFT/RSHIFT, 0xA2/0xA3: LCONTROL/RCONTROL)
-                if event.vkCode in (0x5B, 0x5C, 0xA0, 0xA1, 0xA2, 0xA3):
-                    return 1
+                # But do NOT suppress when we are actively pasting dictation text.
+                is_pasting = getattr(self.handler, "is_pasting", False)
+                if event.vkCode in (0x5B, 0x5C, 0xA0, 0xA1, 0xA2, 0xA3, 0x10, 0x11, 0x12):
+                    is_suppressed = event.vkCode in (0x5B, 0x5C, 0xA0, 0xA1, 0xA2, 0xA3) and not is_pasting
+                    runtime_trace.trace_event(
+                        "hook_injected_modifier",
+                        subsystem="input",
+                        severity=runtime_trace.DEBUG,
+                        payload={
+                            "vkCode": hex(event.vkCode),
+                            "is_pasting": is_pasting,
+                            "suppressed": is_suppressed,
+                            "w_param": hex(w_param)
+                        }
+                    )
+                    if is_suppressed:
+                        return 1
         return user32.CallNextHookEx(self._hook, n_code, w_param, l_param)
 
 
@@ -371,6 +386,7 @@ class InputHandler:
         # Explicit field—no global/contextvar magic.
         self._current_request_id: str | None = None
         self._current_trigger_kind = "voice_command"
+        self.is_pasting = False
 
     def _update_surface_state(self, state: str, *args, request_id: str | None = None, **kwargs) -> None:
         """Notify the runtime state sink of a state transition.

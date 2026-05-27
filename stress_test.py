@@ -546,15 +546,32 @@ class AprilStressTests(unittest.TestCase):
         self.assertEqual(cleaned, "Hello dictation mode. This is a test\nand we are recording")
 
         mock_controller = mock.MagicMock()
-        fake_keyboard = types.SimpleNamespace(Controller=mock.MagicMock(return_value=mock_controller))
+        mock_pyperclip = mock.MagicMock()
+        mock_pyperclip.paste.return_value = "original user clipboard"
+        
+        fake_keyboard = types.SimpleNamespace(
+            Controller=mock.MagicMock(return_value=mock_controller),
+            Key=mock.MagicMock()
+        )
         fake_pynput = types.SimpleNamespace(keyboard=fake_keyboard)
         with (
             mock.patch("main.transcribe_with_metadata", return_value=(raw, {"stt_source": "remote"})),
-            mock.patch.dict("sys.modules", {"pynput": fake_pynput, "pynput.keyboard": fake_keyboard}),
+            mock.patch.dict("sys.modules", {
+                "pynput": fake_pynput,
+                "pynput.keyboard": fake_keyboard,
+                "pyperclip": mock_pyperclip
+            }),
         ):
             res = main.on_audio_captured(b"fake audio", 1.5, trigger_kind="voice_dictation")
             self.assertEqual(res, "Hello dictation mode. This is a test\nand we are recording")
-            mock_controller.type.assert_called_once_with("Hello dictation mode. This is a test\nand we are recording")
+            
+            # Verify pyperclip copies were made for each split line
+            copied_texts = [call.args[0] for call in mock_pyperclip.copy.call_args_list]
+            self.assertIn("Hello dictation mode. This is a test", copied_texts)
+            self.assertIn("and we are recording", copied_texts)
+            
+            # Verify clipboard is restored back to its original state at the end
+            self.assertEqual(mock_pyperclip.copy.call_args_list[-1].args[0], "original user clipboard")
 
     def test_handle_user_text_records_provenance_and_validation(self):
         with (
