@@ -53,8 +53,23 @@ def match(text: str, lowered: str) -> IntentPlan | None:
 def execute(action: dict[str, Any], config: dict[str, Any], context: dict[str, Any] | None = None) -> IntentResult:
     context = context or {}
     question = str(action.get("question") or action.get("text") or context.get("text") or "").strip()
-    intent_package = importlib.import_module("intent")
-    reply = intent_package.capture_and_query(question, config)
+    try:
+        intent_package = importlib.import_module("intent")
+        reply = intent_package.capture_and_query(question, config)
+    except Exception as exc:
+        import runtime_trace
+        runtime_trace.trace_event(
+            "vision_execute_error",
+            subsystem="intent.vision",
+            severity=runtime_trace.ERROR,
+            payload={"error": str(exc)},
+        )
+        return {
+            "reply": f"Screen inspection failed: {exc}",
+            "config_changed": False,
+            "ok": False,
+            "error_kind": "vision_error",
+        }
     lowered = str(reply or "").lower()
     ok = not any(
         marker in lowered

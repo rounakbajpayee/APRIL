@@ -190,8 +190,14 @@ def execute(action: dict[str, Any], config: dict[str, Any], context: dict[str, A
         for key, value in updates.items():
             try:
                 callback(key, value)
-            except Exception:
-                pass
+            except Exception as exc:
+                import runtime_trace
+                runtime_trace.trace_event(
+                    "config_callback_error",
+                    subsystem="intent.config",
+                    severity=runtime_trace.WARNING,
+                    payload={"key": key, "error": str(exc)},
+                )
 
     fragments = [f"{key} set to {value}" for key, value in updates.items()]
     reply = "Done. " + ", ".join(fragments) + "."
@@ -208,12 +214,28 @@ def _write_user_overrides(merged: dict[str, Any]) -> None:
     for key, value in merged.items():
         if key not in defaults or defaults.get(key) != value:
             overrides[key] = value
-    CONFIG_PATH.write_text(json.dumps(overrides, indent=2), encoding="utf-8")
+    try:
+        CONFIG_PATH.write_text(json.dumps(overrides, indent=2), encoding="utf-8")
+    except OSError as exc:
+        import runtime_trace
+        runtime_trace.trace_event(
+            "config_write_error",
+            subsystem="intent.config",
+            severity=runtime_trace.ERROR,
+            payload={"error": str(exc)},
+        )
 
 
 def _load_defaults() -> dict[str, Any]:
     try:
         payload = json.loads(DEFAULT_PATH.read_text(encoding="utf-8"))
-    except Exception:
+    except Exception as exc:
+        import runtime_trace
+        runtime_trace.trace_event(
+            "config_defaults_load_error",
+            subsystem="intent.config",
+            severity=runtime_trace.WARNING,
+            payload={"error": str(exc)},
+        )
         return {}
     return payload if isinstance(payload, dict) else {}

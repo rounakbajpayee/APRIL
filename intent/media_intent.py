@@ -65,7 +65,22 @@ def match(text: str, lowered: str) -> IntentPlan | None:
 
 
 def execute(action: dict[str, Any], config: dict[str, Any], context: dict[str, Any] | None = None) -> IntentResult:
-    reply = handle_media(action, config)
+    try:
+        reply = handle_media(action, config)
+    except Exception as exc:
+        import runtime_trace
+        runtime_trace.trace_event(
+            "media_execute_error",
+            subsystem="intent.media",
+            severity=runtime_trace.ERROR,
+            payload={"error": str(exc), "action": str(action.get('mode', ''))},
+        )
+        return {
+            "reply": f"Media action failed: {exc}",
+            "config_changed": False,
+            "ok": False,
+            "error_kind": "media_error",
+        }
     lowered = str(reply or "").lower()
     ok = "not configured yet" not in lowered
     return {

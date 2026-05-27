@@ -176,7 +176,22 @@ def match(text: str, lowered: str) -> IntentPlan | None:
 
 
 def execute(action: dict[str, Any], _config: dict[str, Any], context: dict[str, Any] | None = None) -> IntentResult:
-    reply = perform(action)
+    try:
+        reply = perform(action)
+    except Exception as exc:
+        import runtime_trace
+        runtime_trace.trace_event(
+            "device_execute_error",
+            subsystem="intent.device",
+            severity=runtime_trace.ERROR,
+            payload={"error": str(exc), "action": str(action.get('mode', ''))},
+        )
+        return {
+            "reply": f"Device control failed: {exc}",
+            "config_changed": False,
+            "ok": False,
+            "error_kind": "device_error",
+        }
     lowered = str(reply or "").lower()
     ok = not any(marker in lowered for marker in ("couldn't", "not installed", "not available yet", "don't have"))
     return {

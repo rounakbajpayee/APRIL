@@ -128,7 +128,22 @@ def execute(action: dict[str, Any], config: dict[str, Any], context: dict[str, A
             "error_kind": "shell_command_missing",
         }
 
-    result = execute_session_command(node, command, config, timeout=int(config.get("shell_timeout_seconds", 20)))
+    try:
+        result = execute_session_command(node, command, config, timeout=int(config.get("shell_timeout_seconds", 20)))
+    except Exception as exc:
+        import runtime_trace
+        runtime_trace.trace_event(
+            "shell_execute_error",
+            subsystem="intent.shell",
+            severity=runtime_trace.ERROR,
+            payload={"error": str(exc), "node": node, "command": command[:120]},
+        )
+        return {
+            "reply": f"Shell command failed: {exc}",
+            "config_changed": False,
+            "ok": False,
+            "error_kind": "shell_error",
+        }
     output = str(result.get("output", "") or "").strip()
     target = describe_node(node)
 

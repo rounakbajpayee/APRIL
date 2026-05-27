@@ -170,7 +170,14 @@ def _open_visible(url: str) -> None:
         try:
             os.startfile(url)
             return
-        except Exception:
+        except Exception as exc:
+            import runtime_trace
+            runtime_trace.trace_event(
+                "browser_startfile_fallback",
+                subsystem="intent.browser",
+                severity=runtime_trace.WARNING,
+                payload={"error": str(exc), "url": url[:200]},
+            )
             try:
                 subprocess.Popen(
                     ["cmd", "/c", "start", "", url],
@@ -180,8 +187,13 @@ def _open_visible(url: str) -> None:
                     startupinfo=_startupinfo(),
                 )
                 return
-            except Exception:
-                pass
+            except Exception as exc2:
+                runtime_trace.trace_event(
+                    "browser_popen_fallback",
+                    subsystem="intent.browser",
+                    severity=runtime_trace.WARNING,
+                    payload={"error": str(exc2), "url": url[:200]},
+                )
     webbrowser.open(url)
 
 
