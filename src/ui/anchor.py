@@ -81,24 +81,41 @@ class AmbientAnchor(QWidget):
 
     # ------------------------------------------------------------------ setup
 
+    # ------------------------------------------------------------------ setup
+
     def _setup_window(self):
         size = theme.ORB_SIZE + self._PAD * 2
         self.setFixedSize(size, size)
-        self.setStyleSheet("background: rgb(7, 11, 16);")
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setStyleSheet("background: transparent;")
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.Tool
         )
         self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._update_mask(self._core.state)
 
-        # Clip window to circular shape — mask covers only the orb area,
-        # leaving the _PAD border transparent/non-interactive.
+    def _update_mask(self, state: APRILState):
         from PyQt6.QtGui import QRegion
 
         pad = self._PAD
         orb = theme.ORB_SIZE
-        self.setMask(QRegion(pad, pad, orb, orb, QRegion.RegionType.Ellipse))
+        if state == APRILState.DORMANT:
+            cx = self.width() // 2
+            cy = self.height() // 2
+            dot_r = 5  # Allow a tiny bit of padding for anti-aliasing edge
+            self.setMask(
+                QRegion(
+                    cx - dot_r,
+                    cy - dot_r,
+                    dot_r * 2,
+                    dot_r * 2,
+                    QRegion.RegionType.Ellipse,
+                )
+            )
+        else:
+            self.setMask(QRegion(pad, pad, orb, orb, QRegion.RegionType.Ellipse))
 
     def _force_topmost(self):
         """Win32 SetWindowPos HWND_TOPMOST — survives z-order fights."""
@@ -132,13 +149,14 @@ class AmbientAnchor(QWidget):
             case Corner.TOP_LEFT:
                 pos = QPoint(screen.left() + m, screen.top() + m)
         self.move(pos)
+        self._update_mask(self._core.state)
 
     # ------------------------------------------------------------------ animation
 
     def _tick(self):
         state = self._core.state
         speeds = {
-            APRILState.DORMANT: 0.003,
+            APRILState.DORMANT: 0.005,
             APRILState.LISTENING: 0.012,
             APRILState.THINKING: 0.018,
             APRILState.SPEAKING: 0.025,
@@ -147,6 +165,18 @@ class AmbientAnchor(QWidget):
             APRILState.ERROR: 0.030,
         }
         self._phase = (self._phase + speeds.get(state, 0.005)) % 1.0
+
+        # Periodic theme refresh (~2 seconds at 60fps)
+        if not hasattr(self, "_theme_check_counter"):
+            self._theme_check_counter = 0
+        self._theme_check_counter += 1
+        if self._theme_check_counter >= 120:
+            self._theme_check_counter = 0
+            old_light = theme.is_light_theme()
+            theme.refresh_theme()
+            if theme.is_light_theme() != old_light:
+                self.update()
+
         if not hasattr(self, "_last_logged_state") or self._last_logged_state != state:
             self._last_logged_state = state
             runtime_trace.trace_event(
@@ -168,20 +198,24 @@ class AmbientAnchor(QWidget):
         cy = self.height() / 2
         r = theme.ORB_SIZE / 2
 
-        # Fill circular area with dark background
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QBrush(QColor(7, 11, 16)))
-        p.drawEllipse(int(cx - r), int(cy - r), int(r * 2), int(r * 2))
-
         state = self._core.state
         dim_col, bright_col = _STATE_COLORS[state]
+
+        if state == APRILState.DORMANT:
+            # Fluent/iOS clean dormant indicator dot
+            self._draw_dormant(p, cx, cy, r, bright_col)
+            p.end()
+            return
+
+        # Fill circular area with dark background (Fluent/acrylic)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QBrush(theme.BG_BASE))
+        p.drawEllipse(int(cx - r), int(cy - r), int(r * 2), int(r * 2))
 
         self._draw_glow(p, cx, cy, r, bright_col)
         self._draw_base(p, cx, cy, r, dim_col)
 
         match state:
-            case APRILState.DORMANT:
-                self._draw_dormant(p, cx, cy, r, bright_col)
             case APRILState.LISTENING:
                 self._draw_listening(p, cx, cy, r, bright_col)
             case APRILState.THINKING:
@@ -195,12 +229,14 @@ class AmbientAnchor(QWidget):
             case APRILState.ERROR:
                 self._draw_pulse(p, cx, cy, r, bright_col, fast=True)
 
-        # Rim highlight
-        pen = QPen(QColor(255, 255, 255, 35))
+        # Fluent thin high-contrast border
+        pen = QPen(theme.BORDER)
         pen.setWidth(1)
         p.setPen(pen)
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawEllipse(int(cx - r), int(cy - r), int(r * 2), int(r * 2))
+
+        p.end()
 
         p.end()
 
@@ -228,7 +264,8 @@ class AmbientAnchor(QWidget):
         p.drawEllipse(int(cx - r), int(cy - r), int(r * 2), int(r * 2))
 
     def _draw_dormant(self, p: QPainter, cx, cy, r, color: QColor):
-        alpha = int(70 + math.sin(self._phase * math.tau) * 35)
+        # A soft breathing opacity pulse (alpha: 130 to 210)
+        alpha = int(170 + math.sin(self._phase * math.tau) * 40)
         c = QColor(color)
         c.setAlpha(alpha)
         p.setPen(Qt.PenStyle.NoPen)
@@ -412,6 +449,7 @@ class AmbientAnchor(QWidget):
             self._timer.setInterval(66)
         else:
             self._timer.setInterval(theme.ANIMATION_INTERVAL)
+        self._update_mask(state)
 
     def _on_mode_changed(self, mode):
         pass  # orb visible in all modes

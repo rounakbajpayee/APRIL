@@ -98,6 +98,7 @@ class APRILBridge(QObject):
     def attach_overlay(self, overlay) -> None:
         """Register the TransitionalOverlay surface."""
         self._overlay = overlay
+        overlay.bridge = self
 
     def attach_workspace(self, workspace) -> None:
         """Register the TacticalWorkspace surface."""
@@ -205,3 +206,69 @@ class APRILBridge(QObject):
         sig = _dispatch.get(level.lower())
         if sig is not None:
             sig.emit(title, body)
+
+    # ── background typing action ──────────────────────────────────────────
+
+    def retype_text(self, text: str) -> None:
+        """
+        Type/paste the text at the current cursor position in a background thread.
+        This prevents the UI event loop from freezing.
+        """
+        import threading
+
+        threading.Thread(target=self._execute_retype, args=(text,), daemon=True).start()
+
+    def _execute_retype(self, text: str) -> None:
+        if not text:
+            return
+        try:
+            import time
+            import pyperclip
+            from pynput.keyboard import Controller, Key
+
+            keyboard = Controller()
+            keyboard.release(Key.ctrl)
+            keyboard.release(Key.alt)
+            keyboard.release(Key.shift)
+            keyboard.release(Key.cmd)
+            time.sleep(0.05)
+
+            # Backup clipboard
+            old_clip = pyperclip.paste()
+
+            # Split and paste line-by-line
+            lines = text.split("\n")
+            for idx, line in enumerate(lines):
+                if idx > 0:
+                    with keyboard.pressed(Key.shift):
+                        keyboard.press(Key.enter)
+                        keyboard.release(Key.enter)
+                    time.sleep(0.05)
+
+                if line:
+                    pyperclip.copy(line)
+                    time.sleep(0.05)
+                    with keyboard.pressed(Key.ctrl):
+                        keyboard.press("v")
+                        keyboard.release("v")
+                    time.sleep(0.1)
+
+            # Restore clipboard
+            time.sleep(0.1)
+            pyperclip.copy(old_clip)
+        except Exception as e:
+            # Fallback to character typing
+            try:
+                from pynput.keyboard import Controller, Key
+
+                keyboard = Controller()
+                for char in text:
+                    if char == "\n":
+                        with keyboard.pressed(Key.shift):
+                            keyboard.press(Key.enter)
+                            keyboard.release(Key.enter)
+                    else:
+                        keyboard.type(char)
+                    time.sleep(0.015)
+            except Exception as e2:
+                print(f"[Bridge] Retype failed: {e2}")

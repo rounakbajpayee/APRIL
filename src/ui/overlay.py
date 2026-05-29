@@ -1,8 +1,8 @@
 """
 TransitionalOverlay — Focus mode surface.
 
-Appears adjacent to the orb, expands softly, dismisses on Escape or
-clicking outside.  Never steals focus from the active application.
+Appears adjacent to the orb, expands softly, dismisses on Escape.
+Designed to look like a flagship Microsoft Fluent Design UI (adapts to light/dark themes).
 """
 
 from __future__ import annotations
@@ -35,6 +35,8 @@ from PyQt6.QtWidgets import (
     QFrame,
     QApplication,
     QSizePolicy,
+    QScrollArea,
+    QLineEdit,
 )
 
 from .state import APRILCore, APRILState, APRILMode, Corner
@@ -42,12 +44,14 @@ from . import theme
 
 
 class TransitionalOverlay(QWidget):
-    """Focus mode panel — quick interactions and transcription."""
+    """Focus mode panel — quick interactions, transcript, and dictation history."""
 
     def __init__(self, core: APRILCore, parent=None):
         super().__init__(parent)
         self._core = core
+        self.bridge = None  # populated by bridge.attach_overlay
         self._anim_phase = 0.0
+        self._history_cards: list[tuple[str, QFrame]] = []
 
         self._setup_window()
         self._build_ui()
@@ -62,8 +66,8 @@ class TransitionalOverlay(QWidget):
     # ------------------------------------------------------------------ window
 
     def _setup_window(self):
-        # FIX-02: opaque background — no WA_TranslucentBackground
-        self.setStyleSheet("background: rgb(10, 10, 20);")
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setStyleSheet("background: transparent;")
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
@@ -77,51 +81,72 @@ class TransitionalOverlay(QWidget):
     def _build_ui(self):
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(16, 16, 16, 16)
-        self._layout.setSpacing(12)
+        self._layout.setSpacing(10)
 
         # Header row
         hdr = QHBoxLayout()
         self._state_label = QLabel("Ready")
-        self._state_label.setStyleSheet(
-            "color: rgb(34,211,238); font-size: 11px; font-family: 'JetBrains Mono', Consolas;"
-        )
+        self._state_label.setFont(theme.mono_font(10))
         hdr.addWidget(self._state_label)
         hdr.addStretch()
 
         self._mode_btn = QPushButton("Tactical ↗")
         self._mode_btn.setFixedHeight(24)
-        self._mode_btn.setStyleSheet(_BTN_STYLE_GHOST)
+        self._mode_btn.setFont(theme.ui_font(10))
         self._mode_btn.clicked.connect(self._core.escalate)
         hdr.addWidget(self._mode_btn)
 
         close_btn = QPushButton("✕")
         close_btn.setFixedSize(24, 24)
-        close_btn.setStyleSheet(_BTN_STYLE_GHOST)
+        close_btn.setStyleSheet(_btn_ghost_style())
         close_btn.clicked.connect(self._collapse)
         hdr.addWidget(close_btn)
         self._layout.addLayout(hdr)
 
-        self._layout.addWidget(_divider())
+        self._div1 = _divider()
+        self._layout.addWidget(self._div1)
 
         # Transcript area
         self._transcript = QLabel("—")
         self._transcript.setWordWrap(True)
         self._transcript.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self._transcript.setStyleSheet(
-            "color: rgb(220,240,255); font-size: 12px; "
-            "line-height: 1.6; font-family: 'Inter', 'Segoe UI';"
-        )
-        self._transcript.setMinimumHeight(60)
+        self._transcript.setFont(theme.ui_font(11))
+        self._transcript.setMinimumHeight(50)
         self._layout.addWidget(self._transcript)
 
-        # Status row
-        self._layout.addWidget(_divider())
-        status_row = QHBoxLayout()
+        self._div2 = _divider()
+        self._layout.addWidget(self._div2)
 
-        self._task_label = QLabel("No active task")
-        self._task_label.setStyleSheet(
-            "color: rgb(113,113,122); font-size: 10px; font-family: 'JetBrains Mono', Consolas;"
+        # Dictation History Title
+        self._hist_title = QLabel("RECENT DICTATIONS")
+        self._hist_title.setFont(theme.mono_font(9))
+        self._layout.addWidget(self._hist_title)
+
+        # Dictation History Panel (Persistent & Scrollable)
+        self._history_scroll = QScrollArea()
+        self._history_scroll.setFixedHeight(150)
+        self._history_scroll.setWidgetResizable(True)
+        self._history_scroll.setStyleSheet(
+            "QScrollArea { border: none; background: transparent; }"
         )
+
+        self._history_container = QWidget()
+        self._history_container.setStyleSheet("background: transparent;")
+        self._history_layout = QVBoxLayout(self._history_container)
+        self._history_layout.setContentsMargins(0, 0, 0, 0)
+        self._history_layout.setSpacing(6)
+        self._history_layout.addStretch()  # pushes cards to the top
+        self._history_scroll.setWidget(self._history_container)
+
+        self._layout.addWidget(self._history_scroll)
+
+        # Status row
+        self._div3 = _divider()
+        self._layout.addWidget(self._div3)
+
+        status_row = QHBoxLayout()
+        self._task_label = QLabel("No active task")
+        self._task_label.setFont(theme.mono_font(9))
         status_row.addWidget(self._task_label)
         status_row.addStretch()
 
@@ -130,8 +155,9 @@ class TransitionalOverlay(QWidget):
         self._layout.addLayout(status_row)
 
         # Quick-action buttons
-        actions_row = QHBoxLayout()
-        actions_row.setSpacing(8)
+        self._actions_layout = QHBoxLayout()
+        self._actions_layout.setSpacing(8)
+        self._action_buttons = []
         for label, tip in [
             ("Confirm", "Accept current suggestion"),
             ("Dismiss", "Dismiss"),
@@ -140,13 +166,68 @@ class TransitionalOverlay(QWidget):
             btn = QPushButton(label)
             btn.setFixedHeight(28)
             btn.setToolTip(tip)
-            btn.setStyleSheet(
-                _BTN_STYLE_SOLID if label == "Confirm" else _BTN_STYLE_GHOST
-            )
-            actions_row.addWidget(btn)
-        self._layout.addLayout(actions_row)
+            btn.setFont(theme.ui_font(11))
+            self._actions_layout.addWidget(btn)
+            self._action_buttons.append(btn)
+        self._layout.addLayout(self._actions_layout)
 
+        # Apply initial theme styles
+        self._apply_theme()
         self.adjustSize()
+
+    # ------------------------------------------------------------------ theme
+
+    def _apply_theme(self):
+        is_light = theme.is_light_theme()
+        txt_color = "rgb(30,30,42)" if is_light else "rgb(220,240,255)"
+        state_color = "rgb(8,145,178)" if is_light else "rgb(34,211,238)"
+        muted_color = "rgb(115,115,125)" if is_light else "rgb(113,113,122)"
+
+        # Set stylesheet colors
+        self._transcript.setStyleSheet(f"color: {txt_color}; background: transparent;")
+        self._state_label.setStyleSheet(
+            f"color: {state_color}; background: transparent;"
+        )
+        self._hist_title.setStyleSheet(
+            f"color: {muted_color}; background: transparent;"
+        )
+        self._task_label.setStyleSheet(
+            f"color: {muted_color}; background: transparent;"
+        )
+
+        # Re-style dividers
+        div_css = _divider_style()
+        self._div1.setStyleSheet(div_css)
+        self._div2.setStyleSheet(div_css)
+        self._div3.setStyleSheet(div_css)
+
+        # Badge
+        self._context_badge.setStyleSheet(_badge_style())
+
+        # Style standard buttons
+        self._mode_btn.setStyleSheet(_btn_ghost_style())
+        for btn in self._action_buttons:
+            if btn.text() == "Confirm":
+                btn.setStyleSheet(_btn_solid_style())
+            else:
+                btn.setStyleSheet(_btn_ghost_style())
+
+        # Re-style dictation history cards
+        card_bg = "rgba(0,0,0,12)" if is_light else "rgba(255,255,255,8)"
+        card_border = "rgba(0,0,0,18)" if is_light else "rgba(255,255,255,15)"
+        for text, card in self._history_cards:
+            card.setStyleSheet(
+                f"QFrame {{ background: {card_bg}; border: 1px solid {card_border}; border-radius: 8px; }}"
+            )
+            edit = card.findChild(QLineEdit)
+            if edit:
+                edit.setStyleSheet(
+                    f"QLineEdit {{ background: transparent; border: none; color: {txt_color}; }}"
+                )
+            for btn in card.findChildren(QPushButton):
+                btn.setStyleSheet(_btn_icon_style())
+
+        self.update()
 
     # ------------------------------------------------------------------ animation
 
@@ -166,6 +247,10 @@ class TransitionalOverlay(QWidget):
     # ------------------------------------------------------------------ public API
 
     def expand(self):
+        theme.refresh_theme()
+        self._apply_theme()
+        self._load_snapshot_history()
+
         self._reposition(self._core.corner)
         self.setWindowOpacity(0.0)
         self.show()
@@ -175,7 +260,6 @@ class TransitionalOverlay(QWidget):
         self._anim_timer.start()
 
     def _collapse(self):
-        # FIX-09: guard against re-entrant collapse
         if not self.isVisible():
             return
         if self._opacity_anim.state() == QPropertyAnimation.State.Running:
@@ -196,9 +280,102 @@ class TransitionalOverlay(QWidget):
     def set_transcript(self, text: str) -> None:
         """Called by APRILBridge to push live STT/response text."""
         self._transcript.setText(text or "—")
+        # Automatically append to list if it is a completed transcription
+        if text and text.strip() and text != "—" and not text.endswith("…"):
+            self._add_history_card(text)
 
     def set_task(self, text: str) -> None:
         self._task_label.setText(text or "No active task")
+
+    # ------------------------------------------------------------------ dictation history
+
+    def _load_snapshot_history(self):
+        # Clear existing layout cards
+        while self._history_layout.count() > 1:
+            item = self._history_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self._history_cards.clear()
+
+        # Load from state engine snapshot
+        try:
+            from state_engine import load_snapshot
+
+            snapshot = load_snapshot()
+            domain_sums = snapshot.get("domain_summaries", {})
+            april_sum = domain_sums.get("april", {})
+            transcripts = april_sum.get("recent_transcripts", [])
+            for t in transcripts:
+                if t.strip():
+                    self._add_history_card(t)
+        except Exception as e:
+            print(f"[Overlay] Failed to load history: {e}")
+
+    def _add_history_card(self, text: str):
+        if not text or not text.strip():
+            return
+
+        # De-duplicate identical history entries
+        for existing_text, _ in self._history_cards:
+            if existing_text == text:
+                return
+
+        card = QFrame()
+        card_bg = "rgba(0,0,0,12)" if theme.is_light_theme() else "rgba(255,255,255,8)"
+        card_border = (
+            "rgba(0,0,0,18)" if theme.is_light_theme() else "rgba(255,255,255,15)"
+        )
+        card.setStyleSheet(
+            f"QFrame {{ background: {card_bg}; border: 1px solid {card_border}; border-radius: 8px; }}"
+        )
+        card_layout = QHBoxLayout(card)
+        card_layout.setContentsMargins(8, 4, 8, 4)
+        card_layout.setSpacing(6)
+
+        # Editable Text Box (Allows dictation corrections)
+        edit = QLineEdit(text)
+        edit.setFont(theme.ui_font(10))
+        edit.setToolTip("Edit to correct dictation text")
+        txt_color = "rgb(30,30,42)" if theme.is_light_theme() else "rgb(220,240,255)"
+        edit.setStyleSheet(
+            f"QLineEdit {{ background: transparent; border: none; color: {txt_color}; }}"
+        )
+        card_layout.addWidget(edit, 1)
+
+        # Clipboard Copy Action
+        copy_btn = QPushButton("📋")
+        copy_btn.setFixedSize(20, 20)
+        copy_btn.setToolTip("Copy to Clipboard")
+        copy_btn.setStyleSheet(_btn_icon_style())
+        copy_btn.clicked.connect(lambda: self._copy_text(edit.text()))
+        card_layout.addWidget(copy_btn)
+
+        # Retype Action (solves cursor focus loss issues)
+        type_btn = QPushButton("✍️")
+        type_btn.setFixedSize(20, 20)
+        type_btn.setToolTip("Retype at current cursor")
+        type_btn.setStyleSheet(_btn_icon_style())
+        type_btn.clicked.connect(lambda: self._retype_text(edit.text()))
+        card_layout.addWidget(type_btn)
+
+        # Add to scroll layout (insert at top above the stretch)
+        self._history_layout.insertWidget(0, card)
+        self._history_cards.append((text, card))
+
+        # Limit to 10 entries
+        if len(self._history_cards) > 10:
+            oldest_text, oldest_card = self._history_cards.pop(0)
+            self._history_layout.removeWidget(oldest_card)
+            oldest_card.deleteLater()
+
+    def _copy_text(self, text: str):
+        if text:
+            QApplication.clipboard().setText(text)
+            self._core.notification_passive.emit("Copied", "Copied to clipboard.")
+
+    def _retype_text(self, text: str):
+        if text and self.bridge is not None:
+            self.bridge.retype_text(text)
 
     # ------------------------------------------------------------------ layout
 
@@ -235,15 +412,23 @@ class TransitionalOverlay(QWidget):
         path.addRoundedRect(0, 0, self.width(), self.height(), 16, 16)
 
         p.setClipPath(path)
-        p.fillRect(0, 0, self.width(), self.height(), QColor(10, 10, 20, 210))
+        # Dynamic Fluent System Theme adaptation
+        p.fillRect(0, 0, self.width(), self.height(), theme.BG_BASE)
 
         grad = QLinearGradient(0, 0, 0, 60)
-        grad.setColorAt(0, QColor(255, 255, 255, 18))
-        grad.setColorAt(1, QColor(255, 255, 255, 0))
+        grad.setColorAt(
+            0,
+            (
+                QColor(255, 255, 255, 18)
+                if not theme.is_light_theme()
+                else QColor(0, 0, 0, 8)
+            ),
+        )
+        grad.setColorAt(1, QColor(0, 0, 0, 0))
         p.fillRect(0, 0, self.width(), 60, grad)
 
         p.setClipping(False)
-        pen = QPen(QColor(255, 255, 255, 30))
+        pen = QPen(theme.BORDER)
         pen.setWidthF(1.0)
         p.setPen(pen)
         p.setBrush(Qt.BrushStyle.NoBrush)
@@ -286,45 +471,88 @@ class TransitionalOverlay(QWidget):
 def _divider() -> QFrame:
     line = QFrame()
     line.setFrameShape(QFrame.Shape.HLine)
-    line.setStyleSheet("color: rgba(255,255,255,20);")
+    line.setStyleSheet(_divider_style())
     return line
 
 
+def _divider_style() -> str:
+    is_light = theme.is_light_theme()
+    c = "rgba(0, 0, 0, 20)" if is_light else "rgba(255, 255, 255, 20)"
+    return f"color: {c};"
+
+
 class _Badge(QLabel):
+
     def __init__(self, text: str):
         super().__init__(text)
-        self.setStyleSheet(
-            "color: rgb(34,211,238); background: rgba(34,211,238,20); "
-            "border: 1px solid rgba(34,211,238,40); border-radius: 4px; "
-            "font-size: 9px; font-family: 'JetBrains Mono', Consolas; "
-            "padding: 1px 5px;"
-        )
+        self.setStyleSheet(_badge_style())
 
 
-_BTN_STYLE_SOLID = """
-QPushButton {
-    background: rgba(34,211,238,180);
-    color: rgb(10,10,20);
-    border: none;
-    border-radius: 6px;
-    font-size: 11px;
-    padding: 0 10px;
-    font-family: 'Inter', 'Segoe UI';
-}
-QPushButton:hover { background: rgba(34,211,238,220); }
-QPushButton:pressed { background: rgba(34,211,238,255); }
-"""
+def _badge_style() -> str:
+    is_light = theme.is_light_theme()
+    color = "rgb(8,145,178)" if is_light else "rgb(34,211,238)"
+    bg = "rgba(8,145,178,20)" if is_light else "rgba(34,211,238,20)"
+    border = (
+        "1px solid rgba(8,145,178,40)" if is_light else "1px solid rgba(34,211,238,40)"
+    )
+    return f"""
+    color: {color}; background: {bg};
+    border: {border}; border-radius: 4px;
+    font-size: 9px; font-family: 'Segoe UI Variable Display', Consolas;
+    padding: 2px 5px;
+    """
 
-_BTN_STYLE_GHOST = """
-QPushButton {
-    background: rgba(255,255,255,8);
-    color: rgb(180,200,220);
-    border: 1px solid rgba(255,255,255,20);
-    border-radius: 6px;
-    font-size: 11px;
-    padding: 0 10px;
-    font-family: 'Inter', 'Segoe UI';
-}
-QPushButton:hover { background: rgba(255,255,255,15); color: rgb(220,240,255); }
-QPushButton:pressed { background: rgba(255,255,255,5); }
-"""
+
+def _btn_solid_style() -> str:
+    return """
+    QPushButton {
+        background: rgba(34,211,238,180);
+        color: rgb(10,10,20);
+        border: none;
+        border-radius: 6px;
+        font-size: 11px;
+        padding: 0 10px;
+    }
+    QPushButton:hover { background: rgba(34,211,238,220); }
+    QPushButton:pressed { background: rgba(34,211,238,255); }
+    """
+
+
+def _btn_ghost_style() -> str:
+    is_light = theme.is_light_theme()
+    bg = "rgba(0,0,0,8)" if is_light else "rgba(255,255,255,8)"
+    border = (
+        "1px solid rgba(0,0,0,20)" if is_light else "1px solid rgba(255,255,255,20)"
+    )
+    color = "rgb(80,80,95)" if is_light else "rgb(180,200,220)"
+    hover_bg = "rgba(0,0,0,15)" if is_light else "rgba(255,255,255,15)"
+    hover_color = "rgb(30,30,42)" if is_light else "rgb(220,240,255)"
+    return f"""
+    QPushButton {{
+        background: {bg};
+        color: {color};
+        border: {border};
+        border-radius: 6px;
+        font-size: 11px;
+        padding: 0 10px;
+    }}
+    QPushButton:hover {{ background: {hover_bg}; color: {hover_color}; }}
+    QPushButton:pressed {{ background: {bg}; }}
+    """
+
+
+def _btn_icon_style() -> str:
+    is_light = theme.is_light_theme()
+    color = "rgb(115,115,125)" if is_light else "rgb(140,160,180)"
+    hover_color = "rgb(8,145,178)" if is_light else "rgb(34,211,238)"
+    return f"""
+    QPushButton {{
+        background: transparent;
+        color: {color};
+        border: none;
+        font-size: 11px;
+    }}
+    QPushButton:hover {{
+        color: {hover_color};
+    }}
+    """
