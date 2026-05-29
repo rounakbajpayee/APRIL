@@ -1,16 +1,29 @@
+# Application config & state (highly private session info)
 config.json
 learned_phrases.json
 memory.json
+state/
+logs/
+
+# Large binaries & media
+*.wav
+*.mp3
+
+# Design & Archive resources
+Archived_addendums/
+figma_ui/
+
+# Developer environment
+.venv/
 __pycache__/
 *.pyc
-.venv/
 *.egg-info/
 dist/
 build/
-logs/
-state/
+.env
+.env.*.local
+repomix-output.xml
+
+# System files
 .DS_Store
 Thumbs.db
-_ d i a g _ w i d g e t _ s t a r t . l o g  
- t e s t . w a v  
-repomix-output.xml

@@ -1,0 +1,7 @@
+{
+  "voice": true,
+  "ollama_host": "http://192.168.0.234:11434",
+  "ollama_model": "gemma4:e2b",
+  "whisper_host": "http://192.168.0.234:8001",
+  "gemini_api_key": "YOUR_GEMINI_API_KEY_HERE"
+}
