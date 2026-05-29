@@ -2,11 +2,13 @@
 TacticalWorkspace — full diagnostic and orchestration surface.
 
 Larger panel with tabs: Tasks, Nodes, Diagnostics, Log.
-Sparse, inspectable, actionable — not a dashboard.
+Designed in Microsoft Fluent Design (adapts to light/dark system themes).
 """
 
 from __future__ import annotations
-import math, time
+import math
+import time
+from datetime import datetime
 from PyQt6.QtCore import (
     Qt,
     QTimer,
@@ -66,8 +68,8 @@ class TacticalWorkspace(QWidget):
 
     def _setup_window(self):
         self.setFixedSize(theme.WORKSPACE_W, theme.WORKSPACE_H)
-        # FIX-03: opaque background — no WA_TranslucentBackground
-        self.setStyleSheet("background: rgb(10, 10, 18);")
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setStyleSheet("background: transparent;")
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
@@ -84,39 +86,39 @@ class TacticalWorkspace(QWidget):
 
         bar = QHBoxLayout()
 
-        title = QLabel("APRIL  /  Tactical")
-        title.setStyleSheet(
+        self._title = QLabel("APRIL  /  Tactical")
+        self._title.setStyleSheet(
             "color: rgb(34,211,238); font-size: 13px; "
-            "font-family: 'JetBrains Mono', Consolas; letter-spacing: 1px;"
+            "font-family: 'Segoe UI Variable Display', Consolas; letter-spacing: 1px;"
         )
-        bar.addWidget(title)
+        bar.addWidget(self._title)
         bar.addStretch()
 
         self._state_pill = _Pill("DORMANT")
         bar.addWidget(self._state_pill)
 
-        focus_btn = QPushButton("↙ Focus")
-        focus_btn.setFixedHeight(24)
-        focus_btn.setStyleSheet(_BTN_GHOST)
-        focus_btn.clicked.connect(self._core.collapse)
-        bar.addWidget(focus_btn)
+        self._focus_btn = QPushButton("↙ Focus")
+        self._focus_btn.setFixedHeight(24)
+        self._focus_btn.clicked.connect(self._core.collapse)
+        bar.addWidget(self._focus_btn)
 
-        close_btn = QPushButton("✕")
-        close_btn.setFixedSize(24, 24)
-        close_btn.setStyleSheet(_BTN_GHOST)
-        close_btn.clicked.connect(self._collapse)
-        bar.addWidget(close_btn)
+        self._close_btn = QPushButton("✕")
+        self._close_btn.setFixedSize(24, 24)
+        self._close_btn.clicked.connect(self._collapse)
+        bar.addWidget(self._close_btn)
 
         root.addLayout(bar)
-        root.addWidget(_divider())
+        self._div1 = _divider()
+        root.addWidget(self._div1)
 
         self._tabs = QTabWidget()
-        self._tabs.setStyleSheet(_TAB_STYLE)
         self._tabs.addTab(self._build_tasks_tab(), "Tasks")
         self._tabs.addTab(self._build_nodes_tab(), "Nodes")
         self._tabs.addTab(self._build_diag_tab(), "Diagnostics")
         self._tabs.addTab(self._build_log_tab(), "Log")
         root.addWidget(self._tabs)
+
+        self._apply_theme()
 
     # ------------------------------------------------------------------ tabs
 
@@ -135,7 +137,9 @@ class TacticalWorkspace(QWidget):
             cell = _StatCell(label, val, color)
             summary.addWidget(cell)
         layout.addLayout(summary)
-        layout.addWidget(_divider())
+
+        self._task_div = _divider()
+        layout.addWidget(self._task_div)
 
         self._task_model = _TaskModel()
         tv = _Table(self._task_model)
@@ -143,11 +147,12 @@ class TacticalWorkspace(QWidget):
 
         act = QHBoxLayout()
         act.addStretch()
+        self._task_btns = []
         for label in ["Resume", "Cancel", "Clear Done"]:
             btn = QPushButton(label)
             btn.setFixedHeight(26)
-            btn.setStyleSheet(_BTN_GHOST)
             act.addWidget(btn)
+            self._task_btns.append(btn)
         layout.addLayout(act)
 
         return w
@@ -168,11 +173,12 @@ class TacticalWorkspace(QWidget):
 
         act = QHBoxLayout()
         act.addStretch()
+        self._node_btns = []
         for label in ["Ping", "Remove", "Add Node…"]:
             btn = QPushButton(label)
             btn.setFixedHeight(26)
-            btn.setStyleSheet(_BTN_GHOST if label != "Add Node…" else _BTN_ACCENT)
             act.addWidget(btn)
+            self._node_btns.append(btn)
         layout.addLayout(act)
 
         return w
@@ -193,17 +199,17 @@ class TacticalWorkspace(QWidget):
             grid.addWidget(cell)
         layout.addLayout(grid)
 
-        layout.addWidget(_divider())
+        self._diag_div = _divider()
+        layout.addWidget(self._diag_div)
 
-        spark_label = QLabel("Uptime / Response latency")
-        spark_label.setStyleSheet("color: rgb(113,113,122); font-size: 10px;")
-        layout.addWidget(spark_label)
+        self._spark_label = QLabel("Uptime / Response latency")
+        self._spark_label.setFont(theme.ui_font(10))
+        layout.addWidget(self._spark_label)
 
         self._sparkline = _Sparkline()
         layout.addWidget(self._sparkline)
         layout.addStretch()
 
-        # FIX-07: timer created but NOT started here — started in expand(), stopped in _on_collapse_done()
         self._diag_timer = QTimer(self)
         self._diag_timer.setInterval(1000)
         self._diag_timer.timeout.connect(self._refresh_diag)
@@ -219,10 +225,6 @@ class TacticalWorkspace(QWidget):
         self._log_area = QLabel()
         self._log_area.setAlignment(Qt.AlignmentFlag.AlignTop)
         self._log_area.setWordWrap(True)
-        self._log_area.setStyleSheet(
-            "color: rgb(140,160,180); font-family: 'JetBrains Mono', Consolas; "
-            "font-size: 10px; line-height: 1.7;"
-        )
         self._log_entries: list[str] = []
         self._refresh_log()
 
@@ -234,14 +236,78 @@ class TacticalWorkspace(QWidget):
 
         act = QHBoxLayout()
         act.addStretch()
-        btn = QPushButton("Clear Log")
-        btn.setFixedHeight(26)
-        btn.setStyleSheet(_BTN_GHOST)
-        btn.clicked.connect(self._clear_log)
-        act.addWidget(btn)
+        self._clear_btn = QPushButton("Clear Log")
+        self._clear_btn.setFixedHeight(26)
+        self._clear_btn.clicked.connect(self._clear_log)
+        act.addWidget(self._clear_btn)
         layout.addLayout(act)
 
         return w
+
+    # ------------------------------------------------------------------ theme
+
+    def _apply_theme(self):
+        is_light = theme.is_light_theme()
+        txt_color = "rgb(30,30,42)" if is_light else "rgb(220,240,255)"
+        title_color = "rgb(8,145,178)" if is_light else "rgb(34,211,238)"
+        muted_color = "rgb(115,115,125)" if is_light else "rgb(113,113,122)"
+
+        # Title
+        self._title.setStyleSheet(
+            f"color: {title_color}; font-size: 13px; "
+            f"font-family: 'Segoe UI Variable Display', Consolas; letter-spacing: 1px; background: transparent;"
+        )
+
+        # Tabs stylesheet
+        self._tabs.setStyleSheet(_tab_style())
+
+        # Header buttons
+        self._focus_btn.setStyleSheet(_btn_ghost_style())
+        self._close_btn.setStyleSheet(_btn_ghost_style())
+
+        # State pill style update
+        self._on_state_changed(self._core.state)
+
+        # Dividers
+        self._div1.setStyleSheet(_divider_style())
+        if hasattr(self, "_task_div"):
+            self._task_div.setStyleSheet(_divider_style())
+        if hasattr(self, "_diag_div"):
+            self._diag_div.setStyleSheet(_divider_style())
+
+        # Sub-widgets
+        for cell in self.findChildren(_StatCell):
+            cell._apply_theme()
+        for cell in self.findChildren(_MetricCell):
+            cell._apply_theme()
+        for table in self.findChildren(_Table):
+            table.setStyleSheet(_table_style())
+            table.horizontalHeader().setStyleSheet(_header_style())
+
+        # Action buttons
+        if hasattr(self, "_task_btns"):
+            for btn in self._task_btns:
+                btn.setStyleSheet(_btn_ghost_style())
+        if hasattr(self, "_node_btns"):
+            for btn in self._node_btns:
+                if btn.text() == "Add Node…":
+                    btn.setStyleSheet(_btn_accent_style())
+                else:
+                    btn.setStyleSheet(_btn_ghost_style())
+        if hasattr(self, "_clear_btn"):
+            self._clear_btn.setStyleSheet(_btn_ghost_style())
+
+        # Diagnostic spark text
+        if hasattr(self, "_spark_label"):
+            self._spark_label.setStyleSheet(
+                f"color: {muted_color}; background: transparent;"
+            )
+
+        # Log text
+        self._log_area.setStyleSheet(
+            f"color: {txt_color}; font-family: 'Segoe UI Mono', Consolas; "
+            "font-size: 10px; line-height: 1.7; background: transparent;"
+        )
 
     # ------------------------------------------------------------------ animation
 
@@ -251,18 +317,19 @@ class TacticalWorkspace(QWidget):
         self._opacity_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
 
     def expand(self):
+        theme.refresh_theme()
+        self._apply_theme()
+
         self._reposition(self._core.corner)
         self.setWindowOpacity(0.0)
         self.show()
         self._opacity_anim.setStartValue(0.0)
         self._opacity_anim.setEndValue(1.0)
         self._opacity_anim.start()
-        # FIX-07: start diag timer only when visible
         if hasattr(self, "_diag_timer"):
             self._diag_timer.start()
 
     def _collapse(self):
-        # FIX-09: guard against re-entrant collapse
         if not self.isVisible():
             return
         if self._opacity_anim.state() == QPropertyAnimation.State.Running:
@@ -275,7 +342,6 @@ class TacticalWorkspace(QWidget):
     def _on_collapse_done(self):
         self.hide()
         self._opacity_anim.finished.disconnect(self._on_collapse_done)
-        # FIX-07: stop diag timer when hidden
         if hasattr(self, "_diag_timer"):
             self._diag_timer.stop()
         self._core.set_mode(APRILMode.FOCUS)
@@ -307,15 +373,22 @@ class TacticalWorkspace(QWidget):
         path.addRoundedRect(0, 0, self.width(), self.height(), 20, 20)
 
         p.setClipPath(path)
-        p.fillRect(0, 0, self.width(), self.height(), QColor(10, 10, 18, 218))
+        p.fillRect(0, 0, self.width(), self.height(), theme.BG_BASE)
 
         grad = QLinearGradient(0, 0, 0, 80)
-        grad.setColorAt(0, QColor(255, 255, 255, 14))
-        grad.setColorAt(1, QColor(255, 255, 255, 0))
+        grad.setColorAt(
+            0,
+            (
+                QColor(255, 255, 255, 14)
+                if not theme.is_light_theme()
+                else QColor(0, 0, 0, 8)
+            ),
+        )
+        grad.setColorAt(1, QColor(0, 0, 0, 0))
         p.fillRect(0, 0, self.width(), 80, grad)
 
         p.setClipping(False)
-        pen = QPen(QColor(255, 255, 255, 28))
+        pen = QPen(theme.BORDER)
         pen.setWidthF(1.0)
         p.setPen(pen)
         p.setBrush(Qt.BrushStyle.NoBrush)
@@ -342,8 +415,6 @@ class TacticalWorkspace(QWidget):
         self._refresh_log()
 
     def append_log(self, msg: str):
-        from datetime import datetime
-
         ts = datetime.now().strftime("%H:%M:%S")
         self._log_entries.append(f"[{ts}]  {msg}")
         if len(self._log_entries) > 200:
@@ -373,7 +444,7 @@ class TacticalWorkspace(QWidget):
         self._state_pill.setStyleSheet(
             f"color: {c}; background: transparent; "
             f"border: 1px solid {c}; border-radius: 4px; "
-            "font-size: 9px; font-family: 'JetBrains Mono', Consolas; "
+            "font-size: 9px; font-family: 'Segoe UI Variable Display', Consolas; "
             "padding: 2px 6px; letter-spacing: 1px;"
         )
 
@@ -457,10 +528,11 @@ class _NodeModel(QAbstractTableModel):
 
 
 class _Table(QTableView):
+
     def __init__(self, model):
         super().__init__()
         self.setModel(model)
-        self.setStyleSheet(_TABLE_STYLE)
+        self.setStyleSheet(_table_style())
         self.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.verticalHeader().hide()
         self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -470,47 +542,67 @@ class _Table(QTableView):
 
 
 class _StatCell(QFrame):
+
     def __init__(self, label: str, value: str, color: str):
         super().__init__()
-        self.setStyleSheet(
-            "background: rgba(255,255,255,6); border: 1px solid rgba(255,255,255,15); "
-            "border-radius: 8px;"
-        )
+        self._color = color
+        self._label_str = label
         lay = QVBoxLayout(self)
         lay.setContentsMargins(12, 10, 12, 10)
         lay.setSpacing(2)
         self._val = QLabel(value)
-        self._val.setStyleSheet(
-            f"color: {color}; font-size: 20px; font-family: 'JetBrains Mono', Consolas; border: none;"
-        )
-        lbl = QLabel(label)
-        lbl.setStyleSheet("color: rgb(113,113,122); font-size: 10px; border: none;")
+        self._lbl = QLabel(label)
         lay.addWidget(self._val)
-        lay.addWidget(lbl)
+        lay.addWidget(self._lbl)
+        self._apply_theme()
+
+    def _apply_theme(self):
+        is_light = theme.is_light_theme()
+        bg = "rgba(0,0,0,10)" if is_light else "rgba(255,255,255,6)"
+        border = (
+            "1px solid rgba(0,0,0,18)" if is_light else "1px solid rgba(255,255,255,15)"
+        )
+        self.setStyleSheet(f"background: {bg}; border: {border}; border-radius: 8px;")
+
+        self._val.setStyleSheet(
+            f"color: {self._color}; font-size: 20px; font-family: 'Segoe UI Variable Display', Consolas; border: none; background: transparent;"
+        )
+        self._lbl.setStyleSheet(
+            "color: rgb(113,113,122); font-size: 10px; border: none; background: transparent;"
+        )
 
     def set_value(self, v: str):
         self._val.setText(v)
 
 
 class _MetricCell(QFrame):
+
     def __init__(self, label: str, value: str):
         super().__init__()
-        self.setStyleSheet(
-            "background: rgba(255,255,255,6); border: 1px solid rgba(255,255,255,15); "
-            "border-radius: 8px;"
-        )
         lay = QVBoxLayout(self)
         lay.setContentsMargins(10, 8, 10, 8)
         lay.setSpacing(1)
-        lbl = QLabel(label)
-        lbl.setStyleSheet("color: rgb(113,113,122); font-size: 9px; border: none;")
+        self._lbl = QLabel(label)
         self._val = QLabel(value)
-        self._val.setStyleSheet(
-            "color: rgb(220,240,255); font-size: 13px; "
-            "font-family: 'JetBrains Mono', Consolas; border: none;"
-        )
-        lay.addWidget(lbl)
+        lay.addWidget(self._lbl)
         lay.addWidget(self._val)
+        self._apply_theme()
+
+    def _apply_theme(self):
+        is_light = theme.is_light_theme()
+        bg = "rgba(0,0,0,10)" if is_light else "rgba(255,255,255,6)"
+        border = (
+            "1px solid rgba(0,0,0,18)" if is_light else "1px solid rgba(255,255,255,15)"
+        )
+        txt = "rgb(30,30,42)" if is_light else "rgb(220,240,255)"
+        self.setStyleSheet(f"background: {bg}; border: {border}; border-radius: 8px;")
+        self._lbl.setStyleSheet(
+            "color: rgb(113,113,122); font-size: 9px; border: none; background: transparent;"
+        )
+        self._val.setStyleSheet(
+            f"color: {txt}; font-size: 13px; "
+            f"font-family: 'Segoe UI Variable Display', Consolas; border: none; background: transparent;"
+        )
 
     def set_value(self, v: str):
         self._val.setText(v)
@@ -558,12 +650,13 @@ class _Sparkline(QWidget):
 
 
 class _Pill(QLabel):
+
     def __init__(self, text: str):
         super().__init__(text)
         self.setStyleSheet(
             "color: rgb(113,113,122); background: transparent; "
             "border: 1px solid rgb(113,113,122); border-radius: 4px; "
-            "font-size: 9px; font-family: 'JetBrains Mono', Consolas; "
+            "font-size: 9px; font-family: 'Segoe UI Variable Display', Consolas; "
             "padding: 2px 6px; letter-spacing: 1px;"
         )
 
@@ -571,72 +664,112 @@ class _Pill(QLabel):
 def _divider() -> QFrame:
     line = QFrame()
     line.setFrameShape(QFrame.Shape.HLine)
-    line.setStyleSheet("color: rgba(255,255,255,18);")
+    line.setStyleSheet(_divider_style())
     return line
 
 
-_BTN_GHOST = """
-QPushButton {
-    background: rgba(255,255,255,8);
-    color: rgb(180,200,220);
-    border: 1px solid rgba(255,255,255,20);
-    border-radius: 6px;
-    font-size: 11px;
-    padding: 0 10px;
-    font-family: 'Inter', 'Segoe UI';
-}
-QPushButton:hover { background: rgba(255,255,255,15); color: rgb(220,240,255); }
-"""
+def _divider_style() -> str:
+    is_light = theme.is_light_theme()
+    c = "rgba(0, 0, 0, 18)" if is_light else "rgba(255, 255, 255, 18)"
+    return f"color: {c};"
 
-_BTN_ACCENT = """
-QPushButton {
-    background: rgba(34,211,238,160);
-    color: rgb(10,10,20);
-    border: none;
-    border-radius: 6px;
-    font-size: 11px;
-    padding: 0 10px;
-    font-family: 'Inter', 'Segoe UI';
-}
-QPushButton:hover { background: rgba(34,211,238,210); }
-"""
 
-_TAB_STYLE = """
-QTabWidget::pane { border: none; background: transparent; }
-QTabBar::tab {
-    background: transparent;
-    color: rgb(113,113,122);
-    font-size: 11px;
-    font-family: 'Inter', 'Segoe UI';
-    padding: 6px 16px;
-    border: none;
-    border-bottom: 2px solid transparent;
-}
-QTabBar::tab:selected {
-    color: rgb(34,211,238);
-    border-bottom: 2px solid rgb(34,211,238);
-}
-QTabBar::tab:hover { color: rgb(200,220,240); }
-"""
+# ------------------------------------------------------------------ style getters
 
-_TABLE_STYLE = """
-QTableView {
-    background: transparent;
-    border: none;
-    color: rgb(220,240,255);
-    font-size: 11px;
-    font-family: 'Inter', 'Segoe UI';
-    selection-background-color: rgba(34,211,238,30);
-    gridline-color: transparent;
-}
-QHeaderView::section {
-    background: rgba(255,255,255,6);
-    color: rgb(113,113,122);
-    font-size: 10px;
-    font-family: 'JetBrains Mono', Consolas;
-    border: none;
-    padding: 4px 8px;
-}
-QTableView::item { padding: 4px 8px; border-bottom: 1px solid rgba(255,255,255,8); }
-QTableView::item:selected { background: rgba(34,211,238,30); }
-"""
+
+def _btn_ghost_style() -> str:
+    is_light = theme.is_light_theme()
+    bg = "rgba(0,0,0,8)" if is_light else "rgba(255,255,255,8)"
+    border = (
+        "1px solid rgba(0,0,0,20)" if is_light else "1px solid rgba(255,255,255,20)"
+    )
+    color = "rgb(80,80,95)" if is_light else "rgb(180,200,220)"
+    hover_bg = "rgba(0,0,0,15)" if is_light else "rgba(255,255,255,15)"
+    hover_color = "rgb(30,30,42)" if is_light else "rgb(220,240,255)"
+    return f"""
+    QPushButton {{
+        background: {bg};
+        color: {color};
+        border: {border};
+        border-radius: 6px;
+        font-size: 11px;
+        padding: 0 10px;
+        font-family: 'Segoe UI Variable Display', 'Segoe UI';
+    }}
+    QPushButton:hover {{ background: {hover_bg}; color: {hover_color}; }}
+    """
+
+
+def _btn_accent_style() -> str:
+    return """
+    QPushButton {
+        background: rgba(34,211,238,160);
+        color: rgb(10,10,20);
+        border: none;
+        border-radius: 6px;
+        font-size: 11px;
+        padding: 0 10px;
+        font-family: 'Segoe UI Variable Display', 'Segoe UI';
+    }
+    QPushButton:hover { background: rgba(34,211,238,210); }
+    """
+
+
+def _tab_style() -> str:
+    is_light = theme.is_light_theme()
+    color = "rgb(115,115,125)" if is_light else "rgb(113,113,122)"
+    selected_color = "rgb(8,145,178)" if is_light else "rgb(34,211,238)"
+    hover_color = "rgb(30,30,42)" if is_light else "rgb(200,220,240)"
+    return f"""
+    QTabWidget::pane {{ border: none; background: transparent; }}
+    QTabBar::tab {{
+        background: transparent;
+        color: {color};
+        font-size: 11px;
+        font-family: 'Segoe UI Variable Display', 'Segoe UI';
+        padding: 6px 16px;
+        border: none;
+        border-bottom: 2px solid transparent;
+    }}
+    QTabBar::tab:selected {{
+        color: {selected_color};
+        border-bottom: 2px solid {selected_color};
+    }}
+    QTabBar::tab:hover {{ color: {hover_color}; }}
+    """
+
+
+def _table_style() -> str:
+    is_light = theme.is_light_theme()
+    color = "rgb(30,30,42)" if is_light else "rgb(220,240,255)"
+    selected_bg = "rgba(8,145,178,30)" if is_light else "rgba(34,211,238,30)"
+    border_color = "rgba(0,0,0,8)" if is_light else "rgba(255,255,255,8)"
+    return f"""
+    QTableView {{
+        background: transparent;
+        border: none;
+        color: {color};
+        font-size: 11px;
+        font-family: 'Segoe UI', sans-serif;
+        selection-background-color: {selected_bg};
+        gridline-color: transparent;
+    }}
+    QTableView::item {{ padding: 4px 8px; border-bottom: 1px solid {border_color}; }}
+    QTableView::item:selected {{ background: {selected_bg}; }}
+    """
+
+
+def _header_style() -> str:
+    is_light = theme.is_light_theme()
+    bg = "rgba(0,0,0,10)" if is_light else "rgba(255,255,255,6)"
+    color = "rgb(115,115,125)" if is_light else "rgb(113,113,122)"
+    return f"""
+    QHeaderView::section {{
+        background: {bg};
+        color: {color};
+        font-size: 10px;
+        font-family: 'Segoe UI Mono', Consolas;
+        border: none;
+        padding: 4px 8px;
+    }}
+    """
