@@ -1,13 +1,19 @@
 """
-SettingsPanel — mirror of the React settings system.
+SettingsPanel — 8-category settings surface.
 
-8 categories with progressive disclosure based on mode.
-Fluent Design aesthetic adapting dynamically to Light/Dark system themes.
+Design language (Fluent 2 / WinUI 3)
+─────────────────────────────────────
+• Left navigation rail: icon + label per category, search box.
+• Right content area: scrollable per-category settings page.
+• Acrylic glass background + subtle top gloss.
+• All inputs, sliders, checkboxes, and combos adapt to light / dark theme.
+• showEvent refreshes theme on every open so it always matches the system.
 """
 
 from __future__ import annotations
-from PyQt6.QtCore import Qt, QPropertyAnimation, QEasingCurve
-from PyQt6.QtGui import QPainter, QColor, QPen, QPainterPath, QLinearGradient
+
+from PyQt6.QtCore import Qt, QPropertyAnimation, QEasingCurve, QSize
+from PyQt6.QtGui import QPainter, QColor, QPen, QPainterPath, QLinearGradient, QCursor
 from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -28,89 +34,101 @@ from PyQt6.QtWidgets import (
 from .state import APRILCore, APRILMode
 from . import theme
 
-# ------------------------------------------------------------------ categories
+# ── Category definitions ──────────────────────────────────────────────────────
+
+_ALL_CATEGORIES = [
+    dict(
+        id="general",
+        label="General",
+        icon="fa6s.house",
+        desc="Core operational behaviour",
+        modes=[APRILMode.AMBIENT, APRILMode.FOCUS, APRILMode.TACTICAL],
+    ),
+    dict(
+        id="voice",
+        label="Voice",
+        icon="fa6s.microphone",
+        desc="Speech pipeline and dictation",
+        modes=[APRILMode.AMBIENT, APRILMode.FOCUS, APRILMode.TACTICAL],
+    ),
+    dict(
+        id="intelligence",
+        label="Intelligence",
+        icon="fa6s.brain",
+        desc="Inference and reasoning configuration",
+        modes=[APRILMode.FOCUS, APRILMode.TACTICAL],
+    ),
+    dict(
+        id="nodes",
+        label="Nodes",
+        icon="fa6s.network_wired",
+        desc="Distributed orchestration infrastructure",
+        modes=[APRILMode.FOCUS, APRILMode.TACTICAL],
+    ),
+    dict(
+        id="integrations",
+        label="Integrations",
+        icon="fa6s.plug",
+        desc="External ecosystem connections",
+        modes=[APRILMode.FOCUS, APRILMode.TACTICAL],
+    ),
+    dict(
+        id="behaviors",
+        label="Behaviors",
+        icon="fa6s.sliders",
+        desc="Behavior-layer tuning",
+        modes=[APRILMode.FOCUS, APRILMode.TACTICAL],
+    ),
+    dict(
+        id="diagnostics",
+        label="Diagnostics",
+        icon="fa6s.chart_bar",
+        desc="Runtime introspection",
+        modes=[APRILMode.TACTICAL],
+    ),
+    dict(
+        id="system",
+        label="System",
+        icon="fa6s.circle_half_stroke",
+        desc="Low-level runtime controls",
+        modes=[APRILMode.TACTICAL],
+    ),
+]
 
 
 def _categories_for_mode(mode: APRILMode) -> list[dict]:
-    all_cats = [
-        dict(
-            id="general",
-            label="General",
-            desc="Core APRIL operational behaviour",
-            modes=[APRILMode.AMBIENT, APRILMode.FOCUS, APRILMode.TACTICAL],
-        ),
-        dict(
-            id="voice",
-            label="Voice",
-            desc="Speech pipeline and conversational interaction",
-            modes=[APRILMode.AMBIENT, APRILMode.FOCUS, APRILMode.TACTICAL],
-        ),
-        dict(
-            id="intelligence",
-            label="Intelligence",
-            desc="Inference and reasoning configuration",
-            modes=[APRILMode.FOCUS, APRILMode.TACTICAL],
-        ),
-        dict(
-            id="nodes",
-            label="Nodes",
-            desc="Distributed orchestration infrastructure",
-            modes=[APRILMode.FOCUS, APRILMode.TACTICAL],
-        ),
-        dict(
-            id="integrations",
-            label="Integrations",
-            desc="External ecosystem integration",
-            modes=[APRILMode.FOCUS, APRILMode.TACTICAL],
-        ),
-        dict(
-            id="behaviors",
-            label="Behaviors",
-            desc="Behavior-layer tuning",
-            modes=[APRILMode.FOCUS, APRILMode.TACTICAL],
-        ),
-        dict(
-            id="diagnostics",
-            label="Diagnostics",
-            desc="Runtime introspection and orchestration visibility",
-            modes=[APRILMode.TACTICAL],
-        ),
-        dict(
-            id="system",
-            label="System",
-            desc="Low-level runtime and internal system controls",
-            modes=[APRILMode.TACTICAL],
-        ),
-    ]
-    return [c for c in all_cats if mode in c["modes"]]
+    return [c for c in _ALL_CATEGORIES if mode in c["modes"]]
 
 
-# ------------------------------------------------------------------ panel
+# ── Settings panel ────────────────────────────────────────────────────────────
 
 
 class SettingsPanel(QWidget):
 
-    def __init__(self, core: APRILCore, parent=None):
+    def __init__(self, core: APRILCore, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._core = core
-        self._active = None
+        self._active_id: str | None = None
+        self._cat_buttons: dict[str, QPushButton] = {}
         self._categories = _categories_for_mode(core.mode)
 
         self._setup_window()
         self._build_ui()
-        self._select(self._categories[0]["id"])
+
+        if self._categories:
+            self._select(self._categories[0]["id"])
 
         core.mode_changed.connect(self._on_mode_changed)
 
-    def showEvent(self, event):
+    def showEvent(self, event) -> None:  # noqa: N802
         theme.refresh_theme()
         self._apply_theme()
         super().showEvent(event)
 
     # ------------------------------------------------------------------ window
 
-    def _setup_window(self):
-        self.setFixedSize(860, 560)
+    def _setup_window(self) -> None:
+        self.setFixedSize(theme.SETTINGS_W, theme.SETTINGS_H)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setStyleSheet("background: transparent;")
         self.setWindowFlags(
@@ -118,127 +136,149 @@ class SettingsPanel(QWidget):
             | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.Dialog
         )
-        self._center()
-
-    def _center(self):
         screen = QApplication.primaryScreen().availableGeometry()
-        x = screen.center().x() - self.width() // 2
-        y = screen.center().y() - self.height() // 2
-        self.move(x, y)
+        self.move(
+            screen.center().x() - self.width() // 2,
+            screen.center().y() - self.height() // 2,
+        )
 
-    # ------------------------------------------------------------------ ui
+    # ------------------------------------------------------------------ UI
 
-    def _build_ui(self):
+    def _build_ui(self) -> None:
         root = QHBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # ---- Left rail ----
+        # ── Left navigation rail ──────────────────────────────────────────
         self._rail = QWidget()
-        self._rail.setFixedWidth(200)
-        self._rail.setStyleSheet(
-            "background: transparent; border-right: 1px solid rgba(255,255,255,15);"
-        )
+        self._rail.setFixedWidth(210)
+        self._rail.setObjectName("rail")
         rail_lay = QVBoxLayout(self._rail)
         rail_lay.setContentsMargins(0, 0, 0, 0)
         rail_lay.setSpacing(0)
 
-        hdr = QWidget()
-        hdr.setFixedHeight(64)
-        hdr.setStyleSheet(
-            "border-bottom: 1px solid rgba(255,255,255,15); background: transparent;"
-        )
-        hdr_lay = QVBoxLayout(hdr)
-        hdr_lay.setContentsMargins(20, 14, 20, 14)
+        # Rail header
+        rail_hdr = QWidget()
+        rail_hdr.setFixedHeight(70)
+        rail_hdr.setObjectName("rail_hdr")
+        hdr_lay = QVBoxLayout(rail_hdr)
+        hdr_lay.setContentsMargins(20, 16, 20, 16)
         hdr_lay.setSpacing(2)
-        title = QLabel("Settings")
-        title.setFont(theme.ui_font(12))
-        title.setStyleSheet(
-            "color: rgb(165,243,252); font-size: 14px; font-weight: 300; border: none; background: transparent;"
-        )
-        self._mode_lbl = QLabel(self._core.mode.name.capitalize() + " mode")
-        self._mode_lbl.setFont(theme.mono_font(9))
-        self._mode_lbl.setStyleSheet(
-            "color: rgb(113,113,122); font-size: 10px; border: none; background: transparent;"
-        )
-        hdr_lay.addWidget(title)
-        hdr_lay.addWidget(self._mode_lbl)
-        rail_lay.addWidget(hdr)
 
+        self._brand_icon_lbl = QLabel()
+        self._brand_icon_lbl.setFixedSize(20, 20)
+        hdr_lay.addWidget(self._brand_icon_lbl)
+
+        title_row = QHBoxLayout()
+        self._settings_title = QLabel("Settings")
+        self._settings_title.setFont(theme.ui_font(13))
+        title_row.addWidget(self._settings_title)
+        title_row.addStretch()
+        hdr_lay.addLayout(title_row)
+
+        rail_lay.addWidget(rail_hdr)
+
+        # Search
         search_wrap = QWidget()
-        search_wrap.setFixedHeight(52)
+        search_wrap.setFixedHeight(50)
         search_wrap.setStyleSheet("background: transparent;")
         sw_lay = QVBoxLayout(search_wrap)
-        sw_lay.setContentsMargins(12, 10, 12, 10)
+        sw_lay.setContentsMargins(12, 8, 12, 8)
         self._search = QLineEdit()
         self._search.setPlaceholderText("Search settings…")
-        self._search.setStyleSheet(_input_style())
+        self._search.setClearButtonEnabled(True)
+        self._search.setFixedHeight(30)
         self._search.textChanged.connect(self._filter_categories)
         sw_lay.addWidget(self._search)
         rail_lay.addWidget(search_wrap)
 
+        # Category list
         self._cat_scroll = QScrollArea()
         self._cat_scroll.setWidgetResizable(True)
         self._cat_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self._cat_scroll.setStyleSheet("background: transparent;")
+        self._cat_scroll.setStyleSheet(
+            "QScrollArea { background: transparent; border: none; }"
+            "QScrollBar:vertical { width: 3px; background: transparent; }"
+            "QScrollBar::handle:vertical { background: rgba(148,163,184,60); border-radius: 1px; }"
+            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"
+        )
         cat_container = QWidget()
         cat_container.setStyleSheet("background: transparent;")
         self._cat_layout = QVBoxLayout(cat_container)
-        self._cat_layout.setContentsMargins(8, 8, 8, 8)
+        self._cat_layout.setContentsMargins(10, 6, 10, 10)
         self._cat_layout.setSpacing(2)
         self._cat_layout.addStretch()
         self._cat_scroll.setWidget(cat_container)
         rail_lay.addWidget(self._cat_scroll, 1)
 
-        footer = QWidget()
-        footer.setFixedHeight(52)
-        footer.setStyleSheet("background: transparent;")
-        ft_lay = QHBoxLayout(footer)
-        ft_lay.setContentsMargins(12, 8, 12, 8)
-        self._reset_btn = QPushButton("↺  Reset to Defaults")
-        self._reset_btn.setStyleSheet(_btn_warn_style())
-        self._reset_btn.setFixedHeight(28)
-        ft_lay.addWidget(self._reset_btn)
-        rail_lay.addWidget(footer)
+        # Rail footer
+        rail_footer = QWidget()
+        rail_footer.setFixedHeight(56)
+        rail_footer.setStyleSheet("background: transparent;")
+        rf_lay = QHBoxLayout(rail_footer)
+        rf_lay.setContentsMargins(12, 10, 12, 10)
+        self._reset_btn = QPushButton("Reset to Defaults")
+        self._reset_btn.setIcon(theme.get_icon("fa6s.rotate_left"))
+        self._reset_btn.setFixedHeight(30)
+        self._reset_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        rf_lay.addWidget(self._reset_btn)
+        rail_lay.addWidget(rail_footer)
 
         root.addWidget(self._rail)
 
-        # ---- Right content area ----
+        # ── Right content area ────────────────────────────────────────────
         content_wrap = QWidget()
+        content_wrap.setStyleSheet("background: transparent;")
         content_lay = QVBoxLayout(content_wrap)
         content_lay.setContentsMargins(0, 0, 0, 0)
         content_lay.setSpacing(0)
 
+        # Content header
         self._content_hdr = QWidget()
-        self._content_hdr.setFixedHeight(64)
+        self._content_hdr.setFixedHeight(70)
         self._content_hdr.setStyleSheet("background: transparent;")
         ch_lay = QHBoxLayout(self._content_hdr)
-        ch_lay.setContentsMargins(28, 14, 20, 14)
-        self._content_title = QLabel("—")
-        self._content_title.setStyleSheet(
-            "color: rgb(165,243,252); font-size: 16px; font-family: 'Segoe UI Variable Display',sans-serif; font-weight: 300; border: none; background: transparent;"
-        )
-        self._content_desc = QLabel("")
-        self._content_desc.setStyleSheet(
-            "color: rgb(113,113,122); font-size: 11px; font-family: 'Segoe UI',sans-serif; border: none; background: transparent;"
-        )
+        ch_lay.setContentsMargins(28, 16, 20, 16)
+        ch_lay.setSpacing(12)
+
+        # Category icon in header
+        self._content_icon_lbl = QLabel()
+        self._content_icon_lbl.setFixedSize(22, 22)
+        ch_lay.addWidget(self._content_icon_lbl)
+
         title_col = QVBoxLayout()
-        title_col.setSpacing(2)
+        title_col.setSpacing(1)
+        self._content_title = QLabel("—")
+        self._content_title.setFont(theme.ui_font(14))
+        self._content_desc = QLabel("")
+        self._content_desc.setFont(theme.ui_font(10))
         title_col.addWidget(self._content_title)
         title_col.addWidget(self._content_desc)
         ch_lay.addLayout(title_col)
         ch_lay.addStretch()
 
-        self._close_btn = QPushButton("✕")
-        self._close_btn.setFixedSize(28, 28)
+        self._mode_badge = QLabel("AMBIENT MODE")
+        self._mode_badge.setFont(theme.label_font(8))
+        ch_lay.addWidget(self._mode_badge)
+
+        self._close_btn = QPushButton()
+        self._close_btn.setIcon(theme.get_icon("fa6s.xmark"))
+        self._close_btn.setToolTip("Close (Esc)")
+        self._close_btn.setFixedSize(30, 30)
+        self._close_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._close_btn.clicked.connect(self.close)
         ch_lay.addWidget(self._close_btn)
         content_lay.addWidget(self._content_hdr)
 
+        # Rail / content divider
+        self._rail_div = _VDivider()
+        # (rendered as part of painting, not as a widget divider here)
+
+        # Stack of setting pages
         self._stack = QStackedWidget()
         self._stack.setStyleSheet("background: transparent;")
         self._pages: dict[str, QWidget] = {}
-        for cat in _categories_for_mode(APRILMode.TACTICAL):
+        for cat in _ALL_CATEGORIES:
             page = _build_page(cat["id"])
             self._pages[cat["id"]] = page
             self._stack.addWidget(page)
@@ -251,110 +291,145 @@ class SettingsPanel(QWidget):
 
     # ------------------------------------------------------------------ theme
 
-    def _apply_theme(self):
-        is_light = theme.is_light_theme()
-        txt_color = "rgb(30,30,42)" if is_light else "rgb(220,240,255)"
-        title_color = "rgb(8,145,178)" if is_light else "rgb(34,211,238)"
-        muted_color = "rgb(115,115,125)" if is_light else "rgb(113,113,122)"
+    def _apply_theme(self) -> None:
+        light = theme.is_light_theme()
+        accent = "rgb(8,145,178)" if light else "rgb(56,189,248)"
+        title_color = "rgb(15,23,42)" if light else "rgb(220,230,248)"
+        muted = "rgb(100,116,139)"
+        rail_border = "rgba(0,0,0,14)" if light else "rgba(255,255,255,12)"
 
-        # Left rail border
-        border_css = f"background: transparent; border-right: 1px solid {'rgba(0,0,0,15)' if is_light else 'rgba(255,255,255,15)'};"
-        self._rail.setStyleSheet(border_css)
-
-        # Labels
-        self._mode_lbl.setStyleSheet(
-            f"color: {muted_color}; font-size: 10px; font-family: 'Segoe UI Mono',Consolas; border: none; background: transparent;"
+        # Rail border (right edge only)
+        self._rail.setStyleSheet(
+            f"QWidget#rail {{ background: transparent; border-right: 1px solid {rail_border}; }}"
         )
+
+        # Rail header
+        rail_hdr_border = "rgba(0,0,0,12)" if light else "rgba(255,255,255,10)"
+        self._brand_icon_lbl.setPixmap(
+            theme.get_icon("fa6s.circle_dot", color=accent).pixmap(18, 18)
+        )
+        self._settings_title.setStyleSheet(
+            f"color: {accent}; font-size: 13px; font-weight: 600; "
+            f"font-family: 'Segoe UI Variable Display', sans-serif; background: transparent; border: none;"
+        )
+
+        # Search field
+        self._search.setStyleSheet(_input_css())
+
+        # Reset button
+        self._reset_btn.setStyleSheet(_warn_btn_css())
+        self._reset_btn.setIcon(theme.get_icon("fa6s.rotate_left", color="rgb(185,28,28)"))
+
+        # Mode badge
+        self._mode_badge.setStyleSheet(
+            f"color: {muted}; font-size: 8px; letter-spacing: 1.4px; "
+            f"font-family: 'Segoe UI Variable Display', sans-serif; background: transparent; border: none;"
+        )
+        self._mode_badge.setText(f"{self._core.mode.name}  MODE")
+
+        # Content header
         self._content_title.setStyleSheet(
-            f"color: {title_color}; font-size: 16px; font-family: 'Segoe UI Variable Display',sans-serif; font-weight: 300; border: none; background: transparent;"
+            f"color: {title_color}; font-size: 14px; font-weight: 300; "
+            f"font-family: 'Segoe UI Variable Display', sans-serif; background: transparent; border: none;"
         )
         self._content_desc.setStyleSheet(
-            f"color: {muted_color}; font-size: 11px; font-family: 'Segoe UI',sans-serif; border: none; background: transparent;"
+            f"color: {muted}; font-size: 10px; "
+            f"font-family: 'Segoe UI Variable Display', sans-serif; background: transparent; border: none;"
+        )
+        self._close_btn.setStyleSheet(_icon_btn_css())
+        self._close_btn.setIcon(
+            theme.get_icon("fa6s.xmark", color="rgb(71,85,105)" if light else "rgb(148,163,184)")
         )
 
-        # Inputs and controls
-        self._search.setStyleSheet(_input_style())
-        self._reset_btn.setStyleSheet(_btn_warn_style())
-        self._close_btn.setStyleSheet(_btn_ghost_style())
-
-        # Children inputs style refresh
+        # Cascade theme to all child controls
         for edit in self.findChildren(QLineEdit):
-            if edit != self._search:
-                edit.setStyleSheet(_input_style())
+            if edit is not self._search:
+                edit.setStyleSheet(_input_css())
         for combo in self.findChildren(QComboBox):
-            combo.setStyleSheet(_combo_style())
-        for slider in self.findChildren(QSlider):
-            slider.setStyleSheet(_slider_style())
+            combo.setStyleSheet(_combo_css())
+        for sl in self.findChildren(QSlider):
+            sl.setStyleSheet(_slider_css())
         for cb in self.findChildren(QCheckBox):
-            cb.setStyleSheet(_checkbox_style())
+            cb.setStyleSheet(_checkbox_css())
         for lbl in self.findChildren(QLabel):
-            # Section headers
-            if lbl.text().isupper() and len(lbl.text()) < 30:
+            txt = lbl.text()
+            if txt.isupper() and 2 < len(txt) < 32:
                 lbl.setStyleSheet(
-                    f"color: {muted_color}; font-size: 9px; letter-spacing: 1.5px; font-family: 'Segoe UI Mono', Consolas; padding-top: 4px; background: transparent; border: none;"
+                    f"color: {muted}; font-size: 9px; letter-spacing: 1.4px; "
+                    f"font-family: 'Segoe UI Variable Display', sans-serif; "
+                    f"background: transparent; border: none; padding-top: 6px;"
                 )
             elif (
-                lbl.parentWidget()
-                and type(lbl.parentWidget()).__name__ == "QWidget"
-                and lbl.objectName() != "content_desc"
+                lbl
+                not in (
+                    self._settings_title,
+                    self._content_title,
+                    self._content_desc,
+                    self._mode_badge,
+                    self._brand_icon_lbl,
+                    self._content_icon_lbl,
+                )
+                and lbl.objectName() not in ("brand_icon", "content_icon")
+                and not txt.isupper()
             ):
-                # Standard setting row label
                 lbl.setStyleSheet(
-                    f"color: {txt_color}; font-size: 12px; font-family: 'Segoe UI', sans-serif; background: transparent; border: none;"
+                    f"color: {title_color}; font-size: 12px; "
+                    f"font-family: 'Segoe UI Variable Display', sans-serif; "
+                    f"background: transparent; border: none;"
                 )
 
         self._rebuild_cat_buttons()
         self.update()
 
-    def _rebuild_cat_buttons(self):
+    def _rebuild_cat_buttons(self) -> None:
         while self._cat_layout.count() > 1:
             item = self._cat_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
 
         query = self._search.text().lower()
-        self._cat_buttons: dict[str, QPushButton] = {}
+        self._cat_buttons.clear()
 
         for cat in self._categories:
             if query and query not in cat["label"].lower():
                 continue
-            btn = QPushButton(cat["label"])
+            btn = _NavButton(cat["label"], cat["icon"])
             btn.setCheckable(True)
-            btn.setFixedHeight(32)
-            btn.clicked.connect(lambda _, cid=cat["id"]: self._select(cid))
+            btn.clicked.connect(lambda _checked, cid=cat["id"]: self._select(cid))
             self._cat_buttons[cat["id"]] = btn
             self._cat_layout.insertWidget(self._cat_layout.count() - 1, btn)
 
-        # Style new buttons
         for cid, btn in self._cat_buttons.items():
-            btn.setStyleSheet(
-                _cat_btn_active() if cid == self._active else _cat_btn_style()
-            )
+            btn.set_active(cid == self._active_id)
 
-    def _select(self, cat_id: str):
-        self._active = cat_id
+    def _select(self, cat_id: str) -> None:
+        self._active_id = cat_id
         for cid, btn in self._cat_buttons.items():
-            btn.setChecked(cid == cat_id)
-            btn.setStyleSheet(_cat_btn_active() if cid == cat_id else _cat_btn_style())
+            btn.set_active(cid == cat_id)
 
         cat = next((c for c in self._categories if c["id"] == cat_id), None)
         if cat:
             self._content_title.setText(cat["label"])
             self._content_desc.setText(cat["desc"])
+            ic = theme.get_icon(
+                cat["icon"],
+                color="rgb(8,145,178)" if theme.is_light_theme() else "rgb(56,189,248)",
+            )
+            self._content_icon_lbl.setPixmap(ic.pixmap(20, 20))
 
         if cat_id in self._pages:
             self._stack.setCurrentWidget(self._pages[cat_id])
 
-    def _filter_categories(self):
+    def _filter_categories(self) -> None:
         self._rebuild_cat_buttons()
-        if self._active and self._active in self._cat_buttons:
-            self._select(self._active)
+        if self._active_id and self._active_id in self._cat_buttons:
+            self._select(self._active_id)
         elif self._cat_buttons:
             self._select(next(iter(self._cat_buttons)))
 
     # ------------------------------------------------------------------ painting
 
-    def paintEvent(self, _event):
+    def paintEvent(self, _event) -> None:  # noqa: N802
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
 
@@ -365,14 +440,7 @@ class SettingsPanel(QWidget):
         p.fillRect(0, 0, self.width(), self.height(), theme.BG_BASE)
 
         grad = QLinearGradient(0, 0, 0, 100)
-        grad.setColorAt(
-            0,
-            (
-                QColor(255, 255, 255, 12)
-                if not theme.is_light_theme()
-                else QColor(0, 0, 0, 8)
-            ),
-        )
+        grad.setColorAt(0, QColor(255, 255, 255, 18 if not theme.is_light_theme() else 35))
         grad.setColorAt(1, QColor(0, 0, 0, 0))
         p.fillRect(0, 0, self.width(), 100, grad)
 
@@ -386,7 +454,7 @@ class SettingsPanel(QWidget):
 
     # ------------------------------------------------------------------ keyboard
 
-    def keyPressEvent(self, event):
+    def keyPressEvent(self, event) -> None:  # noqa: N802
         if event.key() == Qt.Key.Key_Escape:
             self.close()
         else:
@@ -394,16 +462,77 @@ class SettingsPanel(QWidget):
 
     # ------------------------------------------------------------------ slots
 
-    def _on_mode_changed(self, mode: APRILMode):
+    def _on_mode_changed(self, mode: APRILMode) -> None:
         self._categories = _categories_for_mode(mode)
-        self._mode_lbl.setText(mode.name.capitalize() + " mode")
+        self._mode_badge.setText(f"{mode.name}  MODE")
         self._rebuild_cat_buttons()
         if self._cat_buttons:
-            first = next(iter(self._cat_buttons))
-            self._select(first)
+            self._select(next(iter(self._cat_buttons)))
 
 
-# ------------------------------------------------------------------ page builders
+# ── Nav button with icon ──────────────────────────────────────────────────────
+
+
+class _NavButton(QPushButton):
+    def __init__(self, label: str, icon_name: str) -> None:
+        super().__init__(label)
+        self._icon_name = icon_name
+        self.setCheckable(True)
+        self.setFixedHeight(36)
+        self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.setIconSize(QSize(14, 14))
+        self.set_active(False)
+
+    def set_active(self, active: bool) -> None:
+        light = theme.is_light_theme()
+        accent = "rgb(8,145,178)" if light else "rgb(56,189,248)"
+        inactive_c = "rgb(100,116,139)"
+        hover_c = "rgb(15,23,42)" if light else "rgb(220,230,248)"
+        active_bg = "rgba(8,145,178,12)" if light else "rgba(56,189,248,10)"
+        hover_bg = "rgba(0,0,0,6)" if light else "rgba(255,255,255,6)"
+
+        if active:
+            self.setIcon(theme.get_icon(self._icon_name, color=accent))
+            self.setStyleSheet(f"""
+QPushButton {{
+    background: {active_bg};
+    color: {accent};
+    border: none;
+    border-left: 2px solid {accent};
+    border-radius: 7px;
+    font-size: 12px;
+    font-family: 'Segoe UI Variable Display', 'Segoe UI';
+    font-weight: 600;
+    padding: 0 12px 0 10px;
+    text-align: left;
+}}
+""")
+        else:
+            self.setIcon(theme.get_icon(self._icon_name, color=inactive_c))
+            self.setStyleSheet(f"""
+QPushButton {{
+    background: transparent;
+    color: {inactive_c};
+    border: none;
+    border-left: 2px solid transparent;
+    border-radius: 7px;
+    font-size: 12px;
+    font-family: 'Segoe UI Variable Display', 'Segoe UI';
+    padding: 0 12px 0 10px;
+    text-align: left;
+}}
+QPushButton:hover {{ background: {hover_bg}; color: {hover_c}; }}
+""")
+
+
+class _VDivider(QFrame):
+    def __init__(self) -> None:
+        super().__init__()
+        self.setFrameShape(QFrame.Shape.VLine)
+        self.setFixedWidth(1)
+
+
+# ── Page builders ─────────────────────────────────────────────────────────────
 
 
 def _build_page(cat_id: str) -> QWidget:
@@ -418,26 +547,31 @@ def _build_page(cat_id: str) -> QWidget:
         "system": _page_system,
     }
     fn = builders.get(cat_id, _page_placeholder)
-    w = QWidget()
-    w.setStyleSheet("background: transparent;")
+    wrapper = QWidget()
+    wrapper.setStyleSheet("background: transparent;")
     scroll = QScrollArea()
     scroll.setWidgetResizable(True)
     scroll.setFrameShape(QFrame.Shape.NoFrame)
-    scroll.setStyleSheet("background: transparent;")
+    scroll.setStyleSheet(
+        "QScrollArea { background: transparent; border: none; }"
+        "QScrollBar:vertical { width: 4px; background: transparent; }"
+        "QScrollBar::handle:vertical { background: rgba(148,163,184,80); border-radius: 2px; }"
+        "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"
+    )
     inner = fn()
     inner.setStyleSheet("background: transparent;")
     scroll.setWidget(inner)
-    lay = QVBoxLayout(w)
+    lay = QVBoxLayout(wrapper)
     lay.setContentsMargins(0, 0, 0, 0)
     lay.addWidget(scroll)
-    return w
+    return wrapper
 
 
 def _page_general() -> QWidget:
     w = QWidget()
     lay = QVBoxLayout(w)
     lay.setContentsMargins(28, 20, 28, 20)
-    lay.setSpacing(20)
+    lay.setSpacing(16)
     lay.addWidget(_section("Presence"))
     lay.addWidget(_toggle("Start on login", True))
     lay.addWidget(_toggle("Show in taskbar", False))
@@ -447,6 +581,12 @@ def _page_general() -> QWidget:
     lay.addWidget(_text_row("Wake phrase", "Hey April"))
     lay.addWidget(_toggle("Push-to-talk fallback", True))
     lay.addWidget(_slider_row("Trigger sensitivity", 70))
+    lay.addWidget(_section("Appearance"))
+    lay.addWidget(_combo_row("Theme", ["System default", "Always light", "Always dark"]))
+    lay.addWidget(_toggle("Corner orb visible", True))
+    lay.addWidget(
+        _combo_row("Default corner", ["Bottom right", "Bottom left", "Top right", "Top left"])
+    )
     lay.addStretch()
     return w
 
@@ -455,11 +595,12 @@ def _page_voice() -> QWidget:
     w = QWidget()
     lay = QVBoxLayout(w)
     lay.setContentsMargins(28, 20, 28, 20)
-    lay.setSpacing(20)
+    lay.setSpacing(16)
     lay.addWidget(_section("Speech Recognition"))
     lay.addWidget(_combo_row("Engine", ["Whisper (local)", "Azure STT", "Google STT"]))
     lay.addWidget(_slider_row("Silence threshold (ms)", 600))
     lay.addWidget(_toggle("Show live transcription", True))
+    lay.addWidget(_toggle("Auto-correct with LLM cleanup", True))
     lay.addWidget(_section("Text-to-Speech"))
     lay.addWidget(_combo_row("Voice", ["af_alloy", "af_bella", "am_adam"]))
     lay.addWidget(_slider_row("Speed", 100))
@@ -467,6 +608,7 @@ def _page_voice() -> QWidget:
     lay.addWidget(_section("Audio"))
     lay.addWidget(_combo_row("Input device", ["Default microphone"]))
     lay.addWidget(_toggle("Noise suppression", True))
+    lay.addWidget(_toggle("Echo cancellation", True))
     lay.addStretch()
     return w
 
@@ -475,13 +617,10 @@ def _page_intelligence() -> QWidget:
     w = QWidget()
     lay = QVBoxLayout(w)
     lay.setContentsMargins(28, 20, 28, 20)
-    lay.setSpacing(20)
+    lay.setSpacing(16)
     lay.addWidget(_section("Model"))
     lay.addWidget(
-        _combo_row(
-            "Primary model",
-            ["cloud-gemini-flash", "cloud-deepseek-v3", "local-qwen-7b"],
-        )
+        _combo_row("Primary model", ["cloud-gemini-flash", "cloud-deepseek-v3", "local-qwen-7b"])
     )
     lay.addWidget(_combo_row("Fallback model", ["cloud-deepseek-v3", "local-qwen-7b"]))
     lay.addWidget(_slider_row("Temperature", 70))
@@ -498,7 +637,7 @@ def _page_nodes() -> QWidget:
     w = QWidget()
     lay = QVBoxLayout(w)
     lay.setContentsMargins(28, 20, 28, 20)
-    lay.setSpacing(20)
+    lay.setSpacing(16)
     lay.addWidget(_section("Node Registry"))
     lay.addWidget(_info_row("mac (inference)", "online · 100.70.3.86"))
     lay.addWidget(_info_row("dell (apps)", "online · 100.103.208.28"))
@@ -515,7 +654,7 @@ def _page_integrations() -> QWidget:
     w = QWidget()
     lay = QVBoxLayout(w)
     lay.setContentsMargins(28, 20, 28, 20)
-    lay.setSpacing(20)
+    lay.setSpacing(16)
     lay.addWidget(_section("Connected Services"))
     for name, connected in [
         ("Oracle (knowledge store)", True),
@@ -535,18 +674,14 @@ def _page_behaviors() -> QWidget:
     w = QWidget()
     lay = QVBoxLayout(w)
     lay.setContentsMargins(28, 20, 28, 20)
-    lay.setSpacing(20)
+    lay.setSpacing(16)
     lay.addWidget(_section("Interruption Handling"))
     lay.addWidget(
-        _combo_row(
-            "On new critical notification", ["Pause and notify", "Queue", "Ignore"]
-        )
+        _combo_row("On new critical notification", ["Pause and notify", "Queue", "Ignore"])
     )
     lay.addWidget(_toggle("Allow mid-sentence interruption", True))
     lay.addWidget(_section("Idle Behavior"))
-    lay.addWidget(
-        _combo_row("After 5 min idle", ["Stay ambient", "Collapse to minimal", "Sleep"])
-    )
+    lay.addWidget(_combo_row("After 5 min idle", ["Stay ambient", "Collapse to minimal", "Sleep"]))
     lay.addWidget(_toggle("Idle breathing animation", True))
     lay.addWidget(_section("Continuity"))
     lay.addWidget(_toggle("Resume suspended tasks on wake", True))
@@ -559,7 +694,7 @@ def _page_diagnostics() -> QWidget:
     w = QWidget()
     lay = QVBoxLayout(w)
     lay.setContentsMargins(28, 20, 28, 20)
-    lay.setSpacing(20)
+    lay.setSpacing(16)
     lay.addWidget(_section("Runtime Metrics"))
     lay.addWidget(_info_row("Uptime", "—"))
     lay.addWidget(_info_row("Total requests", "—"))
@@ -576,22 +711,30 @@ def _page_system() -> QWidget:
     w = QWidget()
     lay = QVBoxLayout(w)
     lay.setContentsMargins(28, 20, 28, 20)
-    lay.setSpacing(20)
+    lay.setSpacing(16)
     lay.addWidget(_section("Runtime"))
     lay.addWidget(_info_row("APRIL version", "0.1.0-alpha"))
-    lay.addWidget(_info_row("Python", "3.12"))
+    lay.addWidget(_info_row("Python", "3.13"))
     lay.addWidget(_info_row("PyQt6", "6.7"))
     lay.addWidget(_toggle("Hardware acceleration", True))
     lay.addWidget(_toggle("Experimental features", False))
     lay.addWidget(_section("Danger Zone"))
     danger_btn = QPushButton("Factory Reset…")
-    danger_btn.setFixedHeight(32)
+    danger_btn.setIcon(theme.get_icon("fa6s.triangle_exclamation", color="rgb(239,68,68)"))
+    danger_btn.setFixedHeight(34)
+    danger_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
     danger_btn.setStyleSheet("""
-        QPushButton { background: rgba(239,68,68,20); color: rgb(239,68,68);
-                      border: 1px solid rgba(239,68,68,60); border-radius: 6px;
-                      font-size: 11px; font-family: 'Segoe UI',sans-serif; }
-        QPushButton:hover { background: rgba(239,68,68,40); }
-    """)
+QPushButton {
+    background: rgba(239,68,68,12);
+    color: rgb(239,68,68);
+    border: 1px solid rgba(239,68,68,50);
+    border-radius: 8px;
+    font-size: 12px;
+    font-family: 'Segoe UI Variable Display', 'Segoe UI';
+    padding: 0 16px;
+}
+QPushButton:hover { background: rgba(239,68,68,22); }
+""")
     lay.addWidget(danger_btn)
     lay.addStretch()
     return w
@@ -602,12 +745,12 @@ def _page_placeholder() -> QWidget:
     lay = QVBoxLayout(w)
     lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
     lbl = QLabel("Coming soon")
-    lbl.setStyleSheet("color: rgb(113,113,122); font-size: 13px;")
+    lbl.setStyleSheet("color: rgb(100,116,139); font-size: 13px;")
     lay.addWidget(lbl)
     return w
 
 
-# ------------------------------------------------------------------ setting rows
+# ── Setting row widgets ───────────────────────────────────────────────────────
 
 
 def _section(title: str) -> QLabel:
@@ -617,6 +760,7 @@ def _section(title: str) -> QLabel:
 
 def _toggle(label: str, default: bool) -> QWidget:
     row = QWidget()
+    row.setStyleSheet("background: transparent;")
     lay = QHBoxLayout(row)
     lay.setContentsMargins(0, 0, 0, 0)
     lbl = QLabel(label)
@@ -630,6 +774,7 @@ def _toggle(label: str, default: bool) -> QWidget:
 
 def _combo_row(label: str, options: list[str]) -> QWidget:
     row = QWidget()
+    row.setStyleSheet("background: transparent;")
     lay = QHBoxLayout(row)
     lay.setContentsMargins(0, 0, 0, 0)
     lbl = QLabel(label)
@@ -637,29 +782,32 @@ def _combo_row(label: str, options: list[str]) -> QWidget:
     lay.addStretch()
     cb = QComboBox()
     cb.addItems(options)
-    cb.setFixedWidth(180)
-    cb.setFixedHeight(28)
+    cb.setFixedWidth(190)
+    cb.setFixedHeight(30)
     lay.addWidget(cb)
     return row
 
 
 def _slider_row(label: str, default: int) -> QWidget:
     row = QWidget()
+    row.setStyleSheet("background: transparent;")
     lay = QHBoxLayout(row)
     lay.setContentsMargins(0, 0, 0, 0)
     lbl = QLabel(label)
     lay.addWidget(lbl)
     lay.addStretch()
+    light = theme.is_light_theme()
+    accent = "rgb(8,145,178)" if light else "rgb(56,189,248)"
     val_lbl = QLabel(str(default))
-    val_lbl.setFixedWidth(32)
+    val_lbl.setFixedWidth(36)
     val_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
     val_lbl.setStyleSheet(
-        "color: rgb(34,211,238); font-size: 11px; font-family: 'Segoe UI Mono',Consolas;"
+        f"color: {accent}; font-size: 11px; font-family: 'Cascadia Code', Consolas; background: transparent;"
     )
     sl = QSlider(Qt.Orientation.Horizontal)
     sl.setRange(0, 100)
     sl.setValue(default)
-    sl.setFixedWidth(140)
+    sl.setFixedWidth(150)
     sl.valueChanged.connect(lambda v: val_lbl.setText(str(v)))
     lay.addWidget(val_lbl)
     lay.addWidget(sl)
@@ -668,20 +816,22 @@ def _slider_row(label: str, default: int) -> QWidget:
 
 def _text_row(label: str, value: str) -> QWidget:
     row = QWidget()
+    row.setStyleSheet("background: transparent;")
     lay = QHBoxLayout(row)
     lay.setContentsMargins(0, 0, 0, 0)
     lbl = QLabel(label)
     lay.addWidget(lbl)
     lay.addStretch()
     inp = QLineEdit(value)
-    inp.setFixedWidth(200)
-    inp.setFixedHeight(28)
+    inp.setFixedWidth(210)
+    inp.setFixedHeight(30)
     lay.addWidget(inp)
     return row
 
 
 def _info_row(label: str, value: str) -> QWidget:
     row = QWidget()
+    row.setStyleSheet("background: transparent;")
     lay = QHBoxLayout(row)
     lay.setContentsMargins(0, 0, 0, 0)
     lbl = QLabel(label)
@@ -689,181 +839,136 @@ def _info_row(label: str, value: str) -> QWidget:
     lay.addStretch()
     val = QLabel(value)
     val.setStyleSheet(
-        "color: rgb(113,113,122); font-size: 11px; font-family: 'Segoe UI Mono',Consolas; background: transparent; border: none;"
+        "color: rgb(100,116,139); font-size: 11px; font-family: 'Cascadia Code', Consolas; "
+        "background: transparent; border: none;"
     )
     lay.addWidget(val)
     return row
 
 
-# ------------------------------------------------------------------ style constants
+# ── Style functions ───────────────────────────────────────────────────────────
 
 
-def _input_style() -> str:
-    is_light = theme.is_light_theme()
-    bg = "rgba(0,0,0,8)" if is_light else "rgba(255,255,255,8)"
-    border = (
-        "1px solid rgba(0,0,0,20)" if is_light else "1px solid rgba(255,255,255,20)"
-    )
-    color = "rgb(30,30,42)" if is_light else "rgb(220,240,255)"
-    focus = "rgba(8,145,178,80)" if is_light else "rgba(34,211,238,80)"
+def _icon_btn_css() -> str:
+    light = theme.is_light_theme()
+    hover = "rgba(0,0,0,7)" if light else "rgba(255,255,255,8)"
     return f"""
-    QLineEdit {{
-        background: {bg};
-        border: {border};
-        border-radius: 6px;
-        color: {color};
-        font-size: 11px;
-        font-family: 'Segoe UI', sans-serif;
-        padding: 0 8px;
-        height: 28px;
-    }}
-    QLineEdit:focus {{ border-color: {focus}; }}
-    """
+QPushButton {{
+    background: transparent;
+    border: none;
+    border-radius: 7px;
+    padding: 4px;
+}}
+QPushButton:hover {{ background: {hover}; }}
+"""
 
 
-def _combo_style() -> str:
-    is_light = theme.is_light_theme()
-    bg = "rgba(0,0,0,8)" if is_light else "rgba(255,255,255,8)"
-    border = (
-        "1px solid rgba(0,0,0,20)" if is_light else "1px solid rgba(255,255,255,20)"
-    )
-    color = "rgb(30,30,42)" if is_light else "rgb(220,240,255)"
-    focus = "rgba(8,145,178,80)" if is_light else "rgba(34,211,238,80)"
-    popup_bg = "rgb(240,240,245)" if is_light else "rgb(18,18,28)"
-    popup_border = (
-        "1px solid rgba(0,0,0,20)" if is_light else "1px solid rgba(255,255,255,20)"
-    )
-    popup_sel = "rgba(8,145,178,40)" if is_light else "rgba(34,211,238,40)"
+def _input_css() -> str:
+    light = theme.is_light_theme()
+    bg = "rgba(0,0,0,6)" if light else "rgba(255,255,255,7)"
+    border = "rgba(0,0,0,18)" if light else "rgba(255,255,255,15)"
+    color = "rgb(15,23,42)" if light else "rgb(220,230,248)"
+    focus = "rgba(8,145,178,100)" if light else "rgba(56,189,248,100)"
+    placeholder = "rgb(148,163,184)"
     return f"""
-    QComboBox {{
-        background: {bg};
-        border: {border};
-        border-radius: 6px;
-        color: {color};
-        font-size: 11px;
-        font-family: 'Segoe UI', sans-serif;
-        padding: 0 8px;
-    }}
-    QComboBox:focus {{ border-color: {focus}; }}
-    QComboBox::drop-down {{ border: none; width: 20px; }}
-    QComboBox QAbstractItemView {{
-        background: {popup_bg};
-        border: {popup_border};
-        color: {color};
-        selection-background-color: {popup_sel};
-    }}
-    """
+QLineEdit {{
+    background: {bg};
+    border: 1px solid {border};
+    border-radius: 7px;
+    color: {color};
+    font-size: 11px;
+    font-family: 'Segoe UI Variable Display', 'Segoe UI';
+    padding: 0 10px;
+}}
+QLineEdit:focus {{ border-color: {focus}; }}
+QLineEdit::placeholder {{ color: {placeholder}; }}
+"""
 
 
-def _slider_style() -> str:
-    is_light = theme.is_light_theme()
-    groove = "rgba(0,0,0,15)" if is_light else "rgba(255,255,255,15)"
-    handle = "rgb(8,145,178)" if is_light else "rgb(34,211,238)"
-    subpage = "rgba(8,145,178,120)" if is_light else "rgba(34,211,238,120)"
+def _combo_css() -> str:
+    light = theme.is_light_theme()
+    bg = "rgba(0,0,0,6)" if light else "rgba(255,255,255,7)"
+    border = "rgba(0,0,0,18)" if light else "rgba(255,255,255,15)"
+    color = "rgb(15,23,42)" if light else "rgb(220,230,248)"
+    popup_bg = "rgb(245,246,250)" if light else "rgb(20,24,38)"
+    sel = "rgba(8,145,178,30)" if light else "rgba(56,189,248,28)"
+    focus = "rgba(8,145,178,100)" if light else "rgba(56,189,248,100)"
     return f"""
-    QSlider::groove:horizontal {{
-        height: 4px;
-        background: {groove};
-        border-radius: 2px;
-    }}
-    QSlider::handle:horizontal {{
-        width: 12px; height: 12px;
-        margin: -4px 0;
-        border-radius: 6px;
-        background: {handle};
-    }}
-    QSlider::sub-page:horizontal {{
-        background: {subpage};
-        border-radius: 2px;
-    }}
-    """
+QComboBox {{
+    background: {bg};
+    border: 1px solid {border};
+    border-radius: 7px;
+    color: {color};
+    font-size: 11px;
+    font-family: 'Segoe UI Variable Display', 'Segoe UI';
+    padding: 0 10px;
+}}
+QComboBox:focus {{ border-color: {focus}; }}
+QComboBox::drop-down {{ border: none; width: 22px; }}
+QComboBox QAbstractItemView {{
+    background: {popup_bg};
+    border: 1px solid {border};
+    border-radius: 8px;
+    color: {color};
+    selection-background-color: {sel};
+    padding: 4px;
+}}
+"""
 
 
-def _checkbox_style() -> str:
-    is_light = theme.is_light_theme()
-    border = (
-        "1px solid rgba(0,0,0,30)" if is_light else "1px solid rgba(255,255,255,30)"
-    )
-    bg = "rgba(0,0,0,8)" if is_light else "rgba(255,255,255,8)"
-    checked = "rgb(8,145,178)" if is_light else "rgb(34,211,238)"
+def _slider_css() -> str:
+    light = theme.is_light_theme()
+    groove = "rgba(0,0,0,12)" if light else "rgba(255,255,255,12)"
+    handle = "rgb(8,145,178)" if light else "rgb(56,189,248)"
+    sub = "rgba(8,145,178,110)" if light else "rgba(56,189,248,100)"
     return f"""
-    QCheckBox::indicator {{
-        width: 16px; height: 16px; border-radius: 4px;
-        border: {border}; background: {bg};
-    }}
-    QCheckBox::indicator:checked {{ background: {checked}; border-color: {checked}; }}
-    """
+QSlider::groove:horizontal {{
+    height: 4px;
+    background: {groove};
+    border-radius: 2px;
+}}
+QSlider::handle:horizontal {{
+    width: 14px; height: 14px;
+    margin: -5px 0;
+    border-radius: 7px;
+    background: {handle};
+}}
+QSlider::sub-page:horizontal {{
+    background: {sub};
+    border-radius: 2px;
+}}
+"""
 
 
-def _cat_btn_style() -> str:
-    is_light = theme.is_light_theme()
-    color = "rgb(115,115,125)" if is_light else "rgb(113,113,122)"
-    hover_bg = "rgba(0,0,0,8)" if is_light else "rgba(255,255,255,8)"
-    hover_color = "rgb(30,30,42)" if is_light else "rgb(200,220,240)"
+def _checkbox_css() -> str:
+    light = theme.is_light_theme()
+    border = "rgba(0,0,0,28)" if light else "rgba(255,255,255,25)"
+    bg = "rgba(0,0,0,6)" if light else "rgba(255,255,255,6)"
+    checked = "rgb(8,145,178)" if light else "rgb(56,189,248)"
     return f"""
-    QPushButton {{
-        background: transparent;
-        color: {color};
-        border: none;
-        border-radius: 6px;
-        font-size: 12px;
-        font-family: 'Segoe UI Variable Display', 'Segoe UI';
-        text-align: left;
-        padding: 0 10px;
-    }}
-    QPushButton:hover {{ background: {hover_bg}; color: {hover_color}; }}
-    """
+QCheckBox::indicator {{
+    width: 18px; height: 18px;
+    border-radius: 5px;
+    border: 1px solid {border};
+    background: {bg};
+}}
+QCheckBox::indicator:checked {{
+    background: {checked};
+    border-color: {checked};
+}}
+"""
 
 
-def _cat_btn_active() -> str:
-    is_light = theme.is_light_theme()
-    bg = "rgba(8,145,178,25)" if is_light else "rgba(34,211,238,25)"
-    color = "rgb(8,145,178)" if is_light else "rgb(34,211,238)"
-    return f"""
-    QPushButton {{
-        background: {bg};
-        color: {color};
-        border: none;
-        border-radius: 6px;
-        font-size: 12px;
-        font-family: 'Segoe UI Variable Display', 'Segoe UI';
-        text-align: left;
-        padding: 0 10px;
-    }}
-    """
-
-
-def _btn_ghost_style() -> str:
-    is_light = theme.is_light_theme()
-    bg = "rgba(0,0,0,8)" if is_light else "rgba(255,255,255,8)"
-    border = (
-        "1px solid rgba(0,0,0,20)" if is_light else "1px solid rgba(255,255,255,20)"
-    )
-    color = "rgb(80,80,95)" if is_light else "rgb(180,200,220)"
-    hover_bg = "rgba(0,0,0,15)" if is_light else "rgba(255,255,255,15)"
-    return f"""
-    QPushButton {{
-        background: {bg};
-        color: {color};
-        border: {border};
-        border-radius: 6px;
-        font-size: 11px;
-    }}
-    QPushButton:hover {{ background: {hover_bg}; }}
-    """
-
-
-def _btn_warn_style() -> str:
-    is_light = theme.is_light_theme()
-    color = "rgb(115,115,125)" if is_light else "rgb(113,113,122)"
-    return f"""
-    QPushButton {{
-        background: transparent;
-        color: {color};
-        border: none;
-        font-size: 11px;
-        font-family: 'Segoe UI', sans-serif;
-        text-align: left;
-    }}
-    QPushButton:hover {{ color: rgb(251,191,36); }}
-    """
+def _warn_btn_css() -> str:
+    return """
+QPushButton {
+    background: rgba(239,68,68,8);
+    color: rgb(239,68,68);
+    border: 1px solid rgba(239,68,68,30);
+    border-radius: 7px;
+    font-size: 11px;
+    font-family: 'Segoe UI Variable Display', 'Segoe UI';
+    padding: 0 12px;
+}
+QPushButton:hover { background: rgba(239,68,68,16); }
+"""
