@@ -6,8 +6,6 @@ from .state import APRILCore, APRILState, APRILMode, PresenceProfile, Corner
 from .bridge import APRILBridge
 from .anchor import AmbientAnchor
 from .overlay import TransitionalOverlay
-from .workspace import TacticalWorkspace
-from .settings import SettingsPanel
 
 __all__ = [
     # State machine
@@ -21,6 +19,4 @@ __all__ = [
     # Surfaces
     "AmbientAnchor",
     "TransitionalOverlay",
-    "TacticalWorkspace",
-    "SettingsPanel",
 ]

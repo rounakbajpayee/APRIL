@@ -76,3 +76,8 @@ try:
 except ImportError:
     genai_mock = MagicMock()
     sys.modules["google.generativeai"] = genai_mock
+
+# Initialize tests SQLite database
+import database
+database.init_db()
+

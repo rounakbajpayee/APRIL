@@ -185,11 +185,42 @@ class APRILBridge(QObject):
         self._core.set_state(april_state, request_id=request_id)
 
     def _apply_transcript(self, text: str) -> None:
-        if self._overlay is not None:
-            self._overlay.set_transcript(text)
-        if self._workspace is not None and hasattr(self._workspace, "add_transcript"):
-            self._workspace.add_transcript(text)
+        if not text or not text.strip() or text == "—" or text.endswith("…"):
+            return
 
+        # Determine type based on basic keyword indicators (auto-crystallization)
+        import database
+        art_type = "Note"
+        title = "Voice Capture"
+        lower_t = text.lower()
+        if "remind me to" in lower_t or "reminder" in lower_t:
+            art_type = "Reminder"
+            title = "Reminder"
+        elif "todo" in lower_t or "task" in lower_t:
+            art_type = "Task"
+            title = "Task"
+        elif "research" in lower_t:
+            art_type = "Research"
+            title = "Research Request"
+
+        # Insert as unfiled (workspace_id = None) transient Recent queue
+        art_id = database.add_artifact(
+            workspace_id=None,
+            art_type=art_type,
+            title=title,
+            content=text,
+            status="Completed"
+        )
+
+        if self._overlay is not None:
+            self._overlay.show_peek(art_type, text)
+        if self._workspace is not None:
+            self._workspace.refresh_data()
+
+    def open_workspace_to_recent(self, edit: bool = False) -> None:
+        """Route from Quick Peek card to Web Workspace recent queue."""
+        import webbrowser
+        webbrowser.open("http://localhost:8080")
 
     def _apply_task(self, text: str) -> None:
         if self._overlay is not None:

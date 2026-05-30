@@ -4,6 +4,9 @@ learned_phrases.json
 memory.json
 state/
 logs/
+src/data/
+actual_*.png
+screenshot_validation.png
 
 # Large binaries & media
 *.wav

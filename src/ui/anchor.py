@@ -60,6 +60,7 @@ class AmbientAnchor(QWidget):
 
         # Opacity used for fade-in/out transitions
         self._opacity = 1.0
+        self._is_light = theme.is_light_theme()
 
         self._setup_window()
         self._place_in_corner(core.corner)
@@ -79,6 +80,24 @@ class AmbientAnchor(QWidget):
         core.mode_changed.connect(self._on_mode_changed)
         core.corner_changed.connect(self._place_in_corner)
 
+    def _get_state_colors(self, state: APRILState) -> tuple[QColor, QColor]:
+        if state == APRILState.WARNING:
+            return (theme.AMBER_80, theme.AMBER)
+        elif state == APRILState.ERROR:
+            return (theme.RED_80, theme.RED)
+        else:
+            c = theme.CYAN
+            c_80 = theme.CYAN_80
+            c_40 = theme.CYAN_40
+            c_20 = theme.CYAN_20
+            
+            if state == APRILState.DORMANT:
+                return (c_20, c_40)
+            elif state == APRILState.SPEAKING:
+                return (c_80, c)
+            else:
+                return (c_40, c_80)
+
     # ------------------------------------------------------------------ setup
 
     # ------------------------------------------------------------------ setup
@@ -97,28 +116,9 @@ class AmbientAnchor(QWidget):
         self._update_mask(self._core.state)
 
     def _update_mask(self, state: APRILState):
-        from PyQt6.QtGui import QRegion
-
-        pad = self._PAD
-        orb = theme.ORB_SIZE
-        if state == APRILState.DORMANT:
-            cx = self.width() // 2
-            cy = self.height() // 2
-            dot_r = 6  # Slightly larger for touch/click targets, but still compact
-            self.setMask(
-                QRegion(
-                    cx - dot_r,
-                    cy - dot_r,
-                    dot_r * 2,
-                    dot_r * 2,
-                    QRegion.RegionType.Ellipse,
-                )
-            )
-        else:
-            # Clear the mask completely for active states.
-            # This enables beautiful anti-aliased borders and translucent glow/shadows
-            # that extend beyond the core orb boundary into the padded region.
-            self.clearMask()
+        # Clear the mask completely so dynamic ripple animations and indicators
+        # can draw outside the central dot bounds cleanly without clipping.
+        self.clearMask()
 
     def _force_topmost(self):
         """Win32 SetWindowPos HWND_TOPMOST — survives z-order fights."""
@@ -169,15 +169,16 @@ class AmbientAnchor(QWidget):
         }
         self._phase = (self._phase + speeds.get(state, 0.005)) % 1.0
 
-        # Periodic theme refresh (~2 seconds at 60fps)
+        # Periodic check for Windows system light/dark theme changes (no disk polling)
         if not hasattr(self, "_theme_check_counter"):
             self._theme_check_counter = 0
         self._theme_check_counter += 1
         if self._theme_check_counter >= 120:
             self._theme_check_counter = 0
-            old_light = theme.is_light_theme()
-            theme.refresh_theme()
-            if theme.is_light_theme() != old_light:
+            curr_light = theme.is_light_theme()
+            if curr_light != self._is_light:
+                self._is_light = curr_light
+                theme.refresh_theme()
                 self.update()
 
         if not hasattr(self, "_last_logged_state") or self._last_logged_state != state:
@@ -199,207 +200,105 @@ class AmbientAnchor(QWidget):
 
         cx = self.width() / 2
         cy = self.height() / 2
-        r = theme.ORB_SIZE / 2
+        dot_r = 5.0
 
         state = self._core.state
-        dim_col, bright_col = _STATE_COLORS[state]
+        dim_col, bright_col = self._get_state_colors(state)
 
+        # 1. State Animations
         if state == APRILState.DORMANT:
-            # Fluent/iOS clean dormant indicator dot
-            self._draw_dormant(p, cx, cy, r, bright_col)
-            p.end()
-            return
-
-        # Fill circular area with dark background (Fluent/acrylic)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QBrush(theme.BG_BASE))
-        p.drawEllipse(int(cx - r), int(cy - r), int(r * 2), int(r * 2))
-
-        self._draw_glow(p, cx, cy, r, bright_col)
-        self._draw_base(p, cx, cy, r, dim_col)
-
-        match state:
-            case APRILState.LISTENING:
-                self._draw_listening(p, cx, cy, r, bright_col)
-            case APRILState.THINKING:
-                self._draw_thinking(p, cx, cy, r, bright_col)
-            case APRILState.SPEAKING:
-                self._draw_speaking(p, cx, cy, r, bright_col)
-            case APRILState.ACTING:
-                self._draw_acting(p, cx, cy, r, bright_col)
-            case APRILState.WARNING:
-                self._draw_pulse(p, cx, cy, r, bright_col)
-            case APRILState.ERROR:
-                self._draw_pulse(p, cx, cy, r, bright_col, fast=True)
-
-        # Fluent thin high-contrast border
-        pen = QPen(theme.BORDER)
-        pen.setWidthF(1.0)
-        p.setPen(pen)
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawEllipse(int(cx - r), int(cy - r), int(r * 2), int(r * 2))
-
-        p.end()
-
-    def _draw_glow(self, p: QPainter, cx, cy, r, color: QColor):
-        # Premium radial gradient creating a soft ambient aura
-        glow_r = r + 14 + math.sin(self._phase * math.tau) * 3
-        grad = QRadialGradient(cx, cy, glow_r)
-        
-        c_center = QColor(color)
-        c_center.setAlpha(65)
-        c_mid = QColor(color)
-        c_mid.setAlpha(25)
-        
-        grad.setColorAt(0.0, c_center)
-        grad.setColorAt(0.5, c_mid)
-        grad.setColorAt(1.0, QColor(0, 0, 0, 0))
-        
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QBrush(grad))
-        p.drawEllipse(
-            int(cx - glow_r), int(cy - glow_r), int(glow_r * 2), int(glow_r * 2)
-        )
-
-    def _draw_base(self, p: QPainter, cx, cy, r, color: QColor):
-        # Translucent glass shine top-down gradient
-        grad = QLinearGradient(cx, cy - r, cx, cy + r)
-        light = QColor(255, 255, 255, 25)
-        dark = QColor(15, 15, 25, 140) if not theme.is_light_theme() else QColor(240, 240, 240, 60)
-        grad.setColorAt(0.0, light)
-        grad.setColorAt(1.0, dark)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QBrush(grad))
-        p.drawEllipse(int(cx - r), int(cy - r), int(r * 2), int(r * 2))
-
-    def _draw_dormant(self, p: QPainter, cx, cy, r, color: QColor):
-        # A soft breathing opacity pulse (alpha: 130 to 210)
-        alpha = int(160 + math.sin(self._phase * math.tau) * 45)
-        c = QColor(color)
-        c.setAlpha(alpha)
-        p.setPen(Qt.PenStyle.NoPen)
-        
-        # Soft glow behind dormant dot
-        grad = QRadialGradient(cx, cy, 8)
-        c_glow = QColor(color)
-        c_glow.setAlpha(int(alpha * 0.3))
-        grad.setColorAt(0.0, c_glow)
-        grad.setColorAt(1.0, QColor(0, 0, 0, 0))
-        p.setBrush(QBrush(grad))
-        p.drawEllipse(int(cx - 8), int(cy - 8), 16, 16)
-        
-        p.setBrush(QBrush(c))
-        dot_r = 4.0
-        p.drawEllipse(int(cx - dot_r), int(cy - dot_r), int(dot_r * 2), int(dot_r * 2))
-
-    def _draw_listening(self, p: QPainter, cx, cy, r, color: QColor):
-        # Clean ripple effect with easing
-        for i in range(3):
-            offset = (self._phase + i / 3.0) % 1.0
-            # Ease out function: 1 - (1 - x)^3
-            ease_offset = 1.0 - math.pow(1.0 - offset, 3.0)
-            ring_r = r * 0.4 + ease_offset * r * 0.65
-            alpha = int((1.0 - ease_offset) * 150)
-            
-            c = QColor(color)
+            # Soft breathing opacity pulse
+            alpha = int(160 + math.sin(self._phase * math.tau) * 45)
+            c = QColor(bright_col)
             c.setAlpha(alpha)
-            pen = QPen(c)
-            pen.setWidthF(1.5)
-            p.setPen(pen)
-            p.setBrush(Qt.BrushStyle.NoBrush)
-            p.drawEllipse(
-                int(cx - ring_r), int(cy - ring_r), int(ring_r * 2), int(ring_r * 2)
-            )
-
-    def _draw_thinking(self, p: QPainter, cx, cy, r, color: QColor):
-        # Windows 11 style elegant gradient loading arc
-        angle = self._phase * 360
-        arc_r = r * 0.68
-        
-        # Draw soft background circle
-        bg_c = QColor(color)
-        bg_c.setAlpha(30)
-        pen = QPen(bg_c)
-        pen.setWidthF(2.0)
-        p.setPen(pen)
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        rect = QRect(int(cx - arc_r), int(cy - arc_r), int(arc_r * 2), int(arc_r * 2))
-        p.drawEllipse(rect)
-
-        # Draw bright spinning sweep arc
-        bright_pen = QPen(color)
-        bright_pen.setWidthF(2.5)
-        bright_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        p.setPen(bright_pen)
-        # Bounding sweep expands and shrinks dynamically
-        sweep = 45 + int(math.sin(self._phase * math.tau * 2) * 25)
-        p.drawArc(rect, int((angle % 360) * 16), int(sweep * 16))
-
-    def _draw_speaking(self, p: QPainter, cx, cy, r, color: QColor):
-        # Fluid spring voice waveform visualizer
-        bar_count = 5
-        bar_w = 2.5
-        gap = 4.0
-        total_w = bar_count * bar_w + (bar_count - 1) * gap
-        x0 = cx - total_w / 2
-
-        for i in range(bar_count):
-            bx = x0 + i * (bar_w + gap)
-            # Staggered wave heights
-            h = (
-                r * 0.25
-                + math.abs(math.sin(self._phase * math.tau + i * 0.6)) * r * 0.55
-            )
-            c = QColor(color)
-            c.setAlpha(170 + int(i * 15))
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(QBrush(c))
-            p.drawRoundedRect(int(bx), int(cy - h / 2), int(bar_w), int(h), 1, 1)
+            p.drawEllipse(int(cx - dot_r), int(cy - dot_r), int(dot_r * 2), int(dot_r * 2))
 
-    def _draw_acting(self, p: QPainter, cx, cy, r, color: QColor):
-        # Modern scanning system arc
-        arc_r = r * 0.65
-        angle = self._phase * 360
+        elif state == APRILState.LISTENING:
+            # Concentric expanding ripples
+            pulse = 1.0 + math.sin(self._phase * math.tau) * 0.15
+            curr_r = dot_r * pulse
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QBrush(bright_col))
+            p.drawEllipse(int(cx - curr_r), int(cy - curr_r), int(curr_r * 2), int(curr_r * 2))
 
-        base = QColor(color)
-        base.setAlpha(40)
-        pen = QPen(base)
-        pen.setWidthF(1.5)
-        pen.setStyle(Qt.PenStyle.DashLine)
-        p.setPen(pen)
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        rect = QRect(int(cx - arc_r), int(cy - arc_r), int(arc_r * 2), int(arc_r * 2))
-        p.drawEllipse(rect)
+            for i in range(2):
+                offset = (self._phase + i / 2.0) % 1.0
+                ring_r = dot_r + offset * 14.0
+                alpha = int((1.0 - offset) * 150)
+                rc = QColor(bright_col)
+                rc.setAlpha(alpha)
+                pen = QPen(rc)
+                pen.setWidthF(1.0)
+                p.setPen(pen)
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.drawEllipse(int(cx - ring_r), int(cy - ring_r), int(ring_r * 2), int(ring_r * 2))
 
-        bright = QPen(color)
-        bright.setWidthF(2.0)
-        bright.setCapStyle(Qt.PenCapStyle.RoundCap)
-        bright.setStyle(Qt.PenStyle.SolidLine)
-        p.setPen(bright)
-        p.drawArc(rect, int((angle % 360) * 16), int(75 * 16))
+        elif state == APRILState.THINKING:
+            # Hugging spinning sweep arc loader
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QBrush(bright_col))
+            p.drawEllipse(int(cx - dot_r), int(cy - dot_r), int(dot_r * 2), int(dot_r * 2))
 
-    def _draw_pulse(self, p: QPainter, cx, cy, r, color: QColor, fast=False):
-        freq = 2.2 if fast else 1.2
-        pulse = (math.sin(self._phase * math.tau * freq) + 1.0) / 2.0
-        ring_r = r * 0.35 + pulse * r * 0.55
-        alpha = int((1.0 - pulse) * 170)
-        
-        c = QColor(color)
-        c.setAlpha(alpha)
-        pen = QPen(c)
-        pen.setWidthF(2.0)
-        p.setPen(pen)
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawEllipse(
-            int(cx - ring_r), int(cy - ring_r), int(ring_r * 2), int(ring_r * 2)
-        )
+            angle = self._phase * 360
+            arc_r = dot_r + 3.5
+            pen = QPen(bright_col)
+            pen.setWidthF(1.5)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            p.setPen(pen)
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            rect = QRect(int(cx - arc_r), int(cy - arc_r), int(arc_r * 2), int(arc_r * 2))
+            p.drawArc(rect, int((angle % 360) * 16), int(120 * 16))
 
-        dot_r = 4.5 + pulse * 1.5
-        c2 = QColor(color)
-        c2.setAlpha(210)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QBrush(c2))
-        p.drawEllipse(int(cx - dot_r), int(cy - dot_r), int(dot_r * 2), int(dot_r * 2))
+        elif state == APRILState.SPEAKING:
+            # Bouncing voice waveform bars
+            bar_w = 2.0
+            gap = 2.0
+            total_w = 3 * bar_w + 2 * gap
+            x0 = cx - total_w / 2
+
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QBrush(bright_col))
+            for i in range(3):
+                bx = x0 + i * (bar_w + gap)
+                h_factor = abs(math.sin(self._phase * math.tau * 1.5 + i * 0.7))
+                h = 3.0 + h_factor * 11.0
+                p.drawRoundedRect(int(bx), int(cy - h / 2), int(bar_w), int(h), 1, 1)
+
+        elif state == APRILState.ACTING:
+            # Radar sweeps line scanner
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QBrush(bright_col))
+            p.drawEllipse(int(cx - dot_r), int(cy - dot_r), int(dot_r * 2), int(dot_r * 2))
+
+            angle_rad = self._phase * math.tau
+            sweep_len = dot_r + 5.0
+            px = cx + math.cos(angle_rad) * sweep_len
+            py = cy - math.sin(angle_rad) * sweep_len
+            pen = QPen(bright_col)
+            pen.setWidthF(1.2)
+            p.setPen(pen)
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawLine(int(cx), int(cy), int(px), int(py))
+
+        elif state == APRILState.WARNING:
+            # Medium alert breathing dot
+            pulse = 1.0 + math.sin(self._phase * math.tau * 1.5) * 0.25
+            curr_r = dot_r * pulse
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QBrush(bright_col))
+            p.drawEllipse(int(cx - curr_r), int(cy - curr_r), int(curr_r * 2), int(curr_r * 2))
+
+        elif state == APRILState.ERROR:
+            # Red flash rapid alert dot
+            pulse = 1.0 + math.sin(self._phase * math.tau * 3.0) * 0.35
+            curr_r = dot_r * pulse
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QBrush(bright_col))
+            p.drawEllipse(int(cx - curr_r), int(cy - curr_r), int(curr_r * 2), int(curr_r * 2))
+
+        p.end()
 
     # ------------------------------------------------------------------ interaction
 
@@ -417,13 +316,15 @@ class AmbientAnchor(QWidget):
         if event.button() == Qt.MouseButton.LeftButton and self._drag_start is not None:
             delta = event.globalPosition().toPoint() - self._drag_start
             if delta.manhattanLength() < 5:  # tap, not drag
-                self._core.escalate()
+                import webbrowser
+                webbrowser.open("http://localhost:8080")
             else:
                 self._snap_to_corner()
             self._drag_start = None
 
     def mouseDoubleClickEvent(self, _event):
-        self._core.escalate()
+        import webbrowser
+        webbrowser.open("http://localhost:8080")
 
     def contextMenuEvent(self, event):
         from PyQt6.QtWidgets import QMenu
@@ -431,18 +332,6 @@ class AmbientAnchor(QWidget):
         menu = QMenu(self)
         menu.setStyleSheet(_menu_style())
 
-        menu.addSection("Mode")
-        for label, m in [
-            ("Ambient", APRILMode.AMBIENT),
-            ("Focus", APRILMode.FOCUS),
-            ("Tactical", APRILMode.TACTICAL),
-        ]:
-            act = menu.addAction(label)
-            act.setCheckable(True)
-            act.setChecked(self._core.mode == m)
-            act.triggered.connect(lambda checked, _m=m: self._core.set_mode(_m))
-
-        menu.addSeparator()
         menu.addAction("Settings …").triggered.connect(
             self._core.settings_requested.emit
         )
@@ -493,8 +382,10 @@ class AmbientAnchor(QWidget):
 def _menu_style() -> str:
     """Dynamic, theme-adaptive context menu stylesheet mimicking Windows 11 Fluent design."""
     is_light = theme.is_light_theme()
+    accent_rgb = f"rgb({theme.CYAN.red()}, {theme.CYAN.green()}, {theme.CYAN.blue()})"
+    
     if is_light:
-        return """
+        css = """
         QMenu {
             background: rgba(243, 243, 243, 220);
             border: 1px solid rgba(0, 0, 0, 24);
@@ -515,7 +406,7 @@ def _menu_style() -> str:
             color: rgb(24, 24, 27);
         }
         QMenu::item:checked {
-            color: rgb(0, 120, 212);
+            color: @ACCENT@;
             font-weight: 600;
         }
         QMenu::separator {
@@ -533,8 +424,9 @@ def _menu_style() -> str:
             letter-spacing: 0.5px;
         }
         """
+        return css.replace("@ACCENT@", accent_rgb)
     else:
-        return """
+        css = """
         QMenu {
             background: rgba(32, 32, 32, 220);
             border: 1px solid rgba(255, 255, 255, 20);
@@ -555,7 +447,7 @@ def _menu_style() -> str:
             color: rgb(243, 243, 243);
         }
         QMenu::item:checked {
-            color: rgb(96, 205, 255);
+            color: @ACCENT@;
             font-weight: 600;
         }
         QMenu::separator {
@@ -573,4 +465,5 @@ def _menu_style() -> str:
             letter-spacing: 0.5px;
         }
         """
+        return css.replace("@ACCENT@", accent_rgb)
 

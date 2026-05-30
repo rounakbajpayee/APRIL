@@ -31,8 +31,6 @@ def main():
         APRILBridge,
         AmbientAnchor,
         TransitionalOverlay,
-        TacticalWorkspace,
-        SettingsPanel,
     )
 
     print("[test] surface imports OK")
@@ -42,13 +40,11 @@ def main():
     bridge = APRILBridge(core)
     anchor = AmbientAnchor(core)
     overlay = TransitionalOverlay(core)
-    workspace = TacticalWorkspace(core)
-    settings = SettingsPanel(core)
     print("[test] surfaces constructed")
 
     bridge.attach_overlay(overlay)
-    bridge.attach_workspace(workspace)
-    core.settings_requested.connect(settings.show)
+    import webbrowser
+    core.settings_requested.connect(lambda: webbrowser.open("http://localhost:8080/#settings"))
     print("[test] bridge wired")
 
     anchor.show()
