@@ -28,7 +28,7 @@ Detailed guides are located in the [docs/](docs/) directory:
 ## 3. Tech Stack
 
 * **UI Layer:** PyQt6 (Vanilla CSS and custom QPainter paint loops).
-* **AI & NLP:** Ollama (default: `gemma4:e2b`), Google Gemini API (for desktop vision querying).
+* **AI & NLP:** Ollama (default: `gemma4:e2b`), Lens vision service (local VLM, OCR, telemetry).
 * **Speech Processing:** OpenAI Whisper (remote endpoint or local CLI fallback).
 * **Automation:** Native Windows `ctypes`, `pycaw` (speakers volume), `pynput` (global LowLevel keyboard hooks).
 
@@ -44,7 +44,7 @@ Detailed guides are located in the [docs/](docs/) directory:
    copy learned_phrases.json.example learned_phrases.json
    copy .env.example .env
    ```
-2. Open `.env` and fill in your `GEMINI_API_KEY`.
+2. Open `.env` and set `VISION_HOST` to your local Lens service address.
 3. Install dependencies inside your virtual environment:
    ```cmd
    pip install -r requirements.txt
