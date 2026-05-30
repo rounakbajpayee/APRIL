@@ -25,6 +25,7 @@ from PyQt6.QtGui import (
     QPainterPath,
     QRadialGradient,
     QLinearGradient,
+    QCursor,
 )
 from PyQt6.QtWidgets import (
     QWidget,
@@ -79,7 +80,21 @@ class TransitionalOverlay(QWidget):
     # ------------------------------------------------------------------ ui
 
     def _build_ui(self):
-        self._layout = QVBoxLayout(self)
+        # Top-level layout has margins to allow the drop shadow to render without clipping
+        self._top_layout = QVBoxLayout(self)
+        self._top_layout.setContentsMargins(12, 12, 12, 12)
+        self._top_layout.setSpacing(0)
+
+        # Base Frame that holds all content and gets the drop shadow
+        self._base_frame = QFrame()
+        self._base_frame.setObjectName("OverlayBase")
+        
+        # Apply drop shadow
+        shadow = theme.create_shadow(QColor(0, 0, 0, 75), radius=16, dy=4)
+        if shadow:
+            self._base_frame.setGraphicsEffect(shadow)
+
+        self._layout = QVBoxLayout(self._base_frame)
         self._layout.setContentsMargins(16, 16, 16, 16)
         self._layout.setSpacing(10)
 
@@ -93,11 +108,14 @@ class TransitionalOverlay(QWidget):
         self._mode_btn = QPushButton("Tactical ↗")
         self._mode_btn.setFixedHeight(24)
         self._mode_btn.setFont(theme.ui_font(10))
+        self._mode_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._mode_btn.clicked.connect(self._core.escalate)
         hdr.addWidget(self._mode_btn)
 
-        close_btn = QPushButton("✕")
+        close_btn = QPushButton()
         close_btn.setFixedSize(24, 24)
+        close_btn.setIcon(theme.get_icon("fa6s.xmark", size=10))
+        close_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         close_btn.setStyleSheet(_btn_ghost_style())
         close_btn.clicked.connect(self._collapse)
         hdr.addWidget(close_btn)
@@ -167,9 +185,12 @@ class TransitionalOverlay(QWidget):
             btn.setFixedHeight(28)
             btn.setToolTip(tip)
             btn.setFont(theme.ui_font(11))
+            btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
             self._actions_layout.addWidget(btn)
             self._action_buttons.append(btn)
         self._layout.addLayout(self._actions_layout)
+
+        self._top_layout.addWidget(self._base_frame)
 
         # Apply initial theme styles
         self._apply_theme()
@@ -179,9 +200,19 @@ class TransitionalOverlay(QWidget):
 
     def _apply_theme(self):
         is_light = theme.is_light_theme()
-        txt_color = "rgb(30,30,42)" if is_light else "rgb(220,240,255)"
-        state_color = "rgb(8,145,178)" if is_light else "rgb(34,211,238)"
-        muted_color = "rgb(115,115,125)" if is_light else "rgb(113,113,122)"
+        txt_color = "rgb(24,24,27)" if is_light else "rgb(243,243,243)"
+        state_color = "rgb(0,120,212)" if is_light else "rgb(96,205,255)"
+        muted_color = "rgb(113,113,122)" if is_light else "rgb(161,161,170)"
+        icon_c = "rgb(82, 82, 91)" if is_light else "rgb(161, 161, 170)"
+
+        # Style base frame background and border mimicking Windows 11 acrylic
+        self._base_frame.setStyleSheet(f"""
+            QFrame#OverlayBase {{
+                background: {theme.BG_BASE.name()};
+                border: 1px solid {theme.BORDER.name()};
+                border-radius: 12px;
+            }}
+        """)
 
         # Set stylesheet colors
         self._transcript.setStyleSheet(f"color: {txt_color}; background: transparent;")
@@ -189,7 +220,7 @@ class TransitionalOverlay(QWidget):
             f"color: {state_color}; background: transparent;"
         )
         self._hist_title.setStyleSheet(
-            f"color: {muted_color}; background: transparent;"
+            f"color: {muted_color}; background: transparent; font-weight: 600; letter-spacing: 0.5px;"
         )
         self._task_label.setStyleSheet(
             f"color: {muted_color}; background: transparent;"
@@ -213,8 +244,8 @@ class TransitionalOverlay(QWidget):
                 btn.setStyleSheet(_btn_ghost_style())
 
         # Re-style dictation history cards
-        card_bg = "rgba(0,0,0,12)" if is_light else "rgba(255,255,255,8)"
-        card_border = "rgba(0,0,0,18)" if is_light else "rgba(255,255,255,15)"
+        card_bg = "rgba(0,0,0,10)" if is_light else "rgba(255,255,255,8)"
+        card_border = "rgba(0,0,0,16)" if is_light else "rgba(255,255,255,14)"
         for text, card in self._history_cards:
             card.setStyleSheet(
                 f"QFrame {{ background: {card_bg}; border: 1px solid {card_border}; border-radius: 8px; }}"
@@ -226,6 +257,10 @@ class TransitionalOverlay(QWidget):
                 )
             for btn in card.findChildren(QPushButton):
                 btn.setStyleSheet(_btn_icon_style())
+                if btn.toolTip() == "Copy to Clipboard":
+                    btn.setIcon(theme.get_icon("fa6s.copy", color=icon_c))
+                elif btn.toolTip() == "Retype at current cursor":
+                    btn.setIcon(theme.get_icon("fa6s.keyboard", color=icon_c))
 
         self.update()
 
@@ -235,6 +270,10 @@ class TransitionalOverlay(QWidget):
         self._opacity_anim = QPropertyAnimation(self, b"windowOpacity")
         self._opacity_anim.setDuration(theme.TRANSITION_NORMAL)
         self._opacity_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+        self._pos_anim = QPropertyAnimation(self, b"pos")
+        self._pos_anim.setDuration(theme.TRANSITION_NORMAL)
+        self._pos_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
 
         self._anim_timer = QTimer(self)
         self._anim_timer.setInterval(theme.ANIMATION_INTERVAL)
@@ -251,12 +290,28 @@ class TransitionalOverlay(QWidget):
         self._apply_theme()
         self._load_snapshot_history()
 
-        self._reposition(self._core.corner)
+        # Calculate slide-in positions
+        target_pos = self._get_reposition_pos(self._core.corner)
+        
+        # Slide slightly from the orb direction (up or down by 20px)
+        is_bottom = self._core.corner in (Corner.BOTTOM_RIGHT, Corner.BOTTOM_LEFT)
+        offset_y = 20 if is_bottom else -20
+        start_pos = target_pos + QPoint(0, offset_y)
+        
+        self.move(start_pos)
         self.setWindowOpacity(0.0)
         self.show()
+
+        # Animate opacity
         self._opacity_anim.setStartValue(0.0)
         self._opacity_anim.setEndValue(1.0)
         self._opacity_anim.start()
+
+        # Animate position (slide-in)
+        self._pos_anim.setStartValue(start_pos)
+        self._pos_anim.setEndValue(target_pos)
+        self._pos_anim.start()
+
         self._anim_timer.start()
 
     def _collapse(self):
@@ -264,15 +319,30 @@ class TransitionalOverlay(QWidget):
             return
         if self._opacity_anim.state() == QPropertyAnimation.State.Running:
             return
+            
+        # Reposition to slide-out
+        target_pos = self.pos()
+        is_bottom = self._core.corner in (Corner.BOTTOM_RIGHT, Corner.BOTTOM_LEFT)
+        offset_y = 20 if is_bottom else -20
+        end_pos = target_pos + QPoint(0, offset_y)
+
         self._opacity_anim.setStartValue(self.windowOpacity())
         self._opacity_anim.setEndValue(0.0)
+        
+        self._pos_anim.setStartValue(target_pos)
+        self._pos_anim.setEndValue(end_pos)
+        
         self._opacity_anim.finished.connect(self._on_collapse_done)
         self._opacity_anim.start()
+        self._pos_anim.start()
 
     def _on_collapse_done(self):
         self.hide()
         self._anim_timer.stop()
-        self._opacity_anim.finished.disconnect(self._on_collapse_done)
+        try:
+            self._opacity_anim.finished.disconnect(self._on_collapse_done)
+        except Exception:
+            pass
         self._core.set_mode(APRILMode.AMBIENT)
 
     # ------------------------------------------------------------------ public data API
@@ -321,39 +391,46 @@ class TransitionalOverlay(QWidget):
                 return
 
         card = QFrame()
-        card_bg = "rgba(0,0,0,12)" if theme.is_light_theme() else "rgba(255,255,255,8)"
-        card_border = (
-            "rgba(0,0,0,18)" if theme.is_light_theme() else "rgba(255,255,255,15)"
-        )
+        card.setObjectName("HistoryCard")
+        is_light = theme.is_light_theme()
+        card_bg = "rgba(0,0,0,10)" if is_light else "rgba(255,255,255,8)"
+        card_border = "rgba(0,0,0,16)" if is_light else "rgba(255,255,255,14)"
         card.setStyleSheet(
-            f"QFrame {{ background: {card_bg}; border: 1px solid {card_border}; border-radius: 8px; }}"
+            f"QFrame#HistoryCard {{ background: {card_bg}; border: 1px solid {card_border}; border-radius: 8px; }}"
         )
         card_layout = QHBoxLayout(card)
-        card_layout.setContentsMargins(8, 4, 8, 4)
-        card_layout.setSpacing(6)
+        card_layout.setContentsMargins(10, 6, 10, 6)
+        card_layout.setSpacing(8)
 
         # Editable Text Box (Allows dictation corrections)
         edit = QLineEdit(text)
         edit.setFont(theme.ui_font(10))
         edit.setToolTip("Edit to correct dictation text")
-        txt_color = "rgb(30,30,42)" if theme.is_light_theme() else "rgb(220,240,255)"
+        txt_color = "rgb(24,24,27)" if is_light else "rgb(243,243,243)"
         edit.setStyleSheet(
             f"QLineEdit {{ background: transparent; border: none; color: {txt_color}; }}"
         )
         card_layout.addWidget(edit, 1)
 
+        # Action buttons container
+        icon_c = "rgb(82, 82, 91)" if is_light else "rgb(161, 161, 170)"
+
         # Clipboard Copy Action
-        copy_btn = QPushButton("📋")
+        copy_btn = QPushButton()
         copy_btn.setFixedSize(20, 20)
         copy_btn.setToolTip("Copy to Clipboard")
+        copy_btn.setIcon(theme.get_icon("fa6s.copy", color=icon_c))
+        copy_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         copy_btn.setStyleSheet(_btn_icon_style())
         copy_btn.clicked.connect(lambda: self._copy_text(edit.text()))
         card_layout.addWidget(copy_btn)
 
         # Retype Action (solves cursor focus loss issues)
-        type_btn = QPushButton("✍️")
+        type_btn = QPushButton()
         type_btn.setFixedSize(20, 20)
         type_btn.setToolTip("Retype at current cursor")
+        type_btn.setIcon(theme.get_icon("fa6s.keyboard", color=icon_c))
+        type_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         type_btn.setStyleSheet(_btn_icon_style())
         type_btn.clicked.connect(lambda: self._retype_text(edit.text()))
         card_layout.addWidget(type_btn)
@@ -379,7 +456,7 @@ class TransitionalOverlay(QWidget):
 
     # ------------------------------------------------------------------ layout
 
-    def _reposition(self, corner: Corner):
+    def _get_reposition_pos(self, corner: Corner) -> QPoint:
         screen = QApplication.primaryScreen().availableGeometry()
         m = theme.CORNER_MARGIN
         ow = self.width()
@@ -400,40 +477,22 @@ class TransitionalOverlay(QWidget):
             case Corner.TOP_LEFT:
                 x = screen.left() + m
                 y = screen.top() + m + orb + gap
-        self.move(x, y)
+        return QPoint(x, y)
+
+    def _reposition(self, corner: Corner):
+        if self.isVisible() and self._pos_anim.state() != QPropertyAnimation.State.Running:
+            self.move(self._get_reposition_pos(corner))
 
     # ------------------------------------------------------------------ painting
 
     def paintEvent(self, _event):
+        # We perform background painting inside _base_frame via stylesheet or custom drawing
+        # and keep the top-level QWidget background fully translucent to prevent shadow clipping.
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-
-        path = QPainterPath()
-        path.addRoundedRect(0, 0, self.width(), self.height(), 16, 16)
-
-        p.setClipPath(path)
-        # Dynamic Fluent System Theme adaptation
-        p.fillRect(0, 0, self.width(), self.height(), theme.BG_BASE)
-
-        grad = QLinearGradient(0, 0, 0, 60)
-        grad.setColorAt(
-            0,
-            (
-                QColor(255, 255, 255, 18)
-                if not theme.is_light_theme()
-                else QColor(0, 0, 0, 8)
-            ),
-        )
-        grad.setColorAt(1, QColor(0, 0, 0, 0))
-        p.fillRect(0, 0, self.width(), 60, grad)
-
-        p.setClipping(False)
-        pen = QPen(theme.BORDER)
-        pen.setWidthF(1.0)
-        p.setPen(pen)
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawPath(path)
-
+        
+        # Just clear area
+        p.fillRect(self.rect(), Qt.GlobalColor.transparent)
         p.end()
 
     # ------------------------------------------------------------------ keyboard
@@ -477,8 +536,8 @@ def _divider() -> QFrame:
 
 def _divider_style() -> str:
     is_light = theme.is_light_theme()
-    c = "rgba(0, 0, 0, 20)" if is_light else "rgba(255, 255, 255, 20)"
-    return f"color: {c};"
+    c = "rgba(0, 0, 0, 16)" if is_light else "rgba(255, 255, 255, 14)"
+    return f"color: {c}; background-color: {c}; border: none; height: 1px;"
 
 
 class _Badge(QLabel):
@@ -490,43 +549,50 @@ class _Badge(QLabel):
 
 def _badge_style() -> str:
     is_light = theme.is_light_theme()
-    color = "rgb(8,145,178)" if is_light else "rgb(34,211,238)"
-    bg = "rgba(8,145,178,20)" if is_light else "rgba(34,211,238,20)"
+    color = "rgb(0, 120, 212)" if is_light else "rgb(96, 205, 255)"
+    bg = "rgba(0, 120, 212, 20)" if is_light else "rgba(96, 205, 255, 20)"
     border = (
-        "1px solid rgba(8,145,178,40)" if is_light else "1px solid rgba(34,211,238,40)"
+        "1px solid rgba(0, 120, 212, 40)" if is_light else "1px solid rgba(96, 205, 255, 40)"
     )
     return f"""
     color: {color}; background: {bg};
     border: {border}; border-radius: 4px;
-    font-size: 9px; font-family: 'Segoe UI Variable Display', Consolas;
-    padding: 2px 5px;
+    font-size: 9px; font-family: 'Segoe UI Variable Small', Consolas;
+    font-weight: 600;
+    padding: 2px 6px;
     """
 
 
 def _btn_solid_style() -> str:
-    return """
-    QPushButton {
-        background: rgba(34,211,238,180);
-        color: rgb(10,10,20);
+    is_light = theme.is_light_theme()
+    bg = "rgb(0, 120, 212)" if is_light else "rgb(0, 120, 212)"
+    hover_bg = "rgb(0, 99, 177)"
+    text_color = "white"
+    return f"""
+    QPushButton {{
+        background: {bg};
+        color: {text_color};
         border: none;
         border-radius: 6px;
         font-size: 11px;
-        padding: 0 10px;
-    }
-    QPushButton:hover { background: rgba(34,211,238,220); }
-    QPushButton:pressed { background: rgba(34,211,238,255); }
+        font-family: 'Segoe UI Variable Text';
+        font-weight: 600;
+        padding: 0 14px;
+    }}
+    QPushButton:hover {{ background: {hover_bg}; }}
+    QPushButton:pressed {{ background: {bg}; }}
     """
 
 
 def _btn_ghost_style() -> str:
     is_light = theme.is_light_theme()
-    bg = "rgba(0,0,0,8)" if is_light else "rgba(255,255,255,8)"
+    bg = "rgba(0,0,0,6)" if is_light else "rgba(255,255,255,6)"
     border = (
-        "1px solid rgba(0,0,0,20)" if is_light else "1px solid rgba(255,255,255,20)"
+        "1px solid rgba(0,0,0,16)" if is_light else "1px solid rgba(255,255,255,14)"
     )
-    color = "rgb(80,80,95)" if is_light else "rgb(180,200,220)"
-    hover_bg = "rgba(0,0,0,15)" if is_light else "rgba(255,255,255,15)"
-    hover_color = "rgb(30,30,42)" if is_light else "rgb(220,240,255)"
+    color = "rgb(55,55,65)" if is_light else "rgb(200,220,240)"
+    hover_bg = "rgba(0,0,0,12)" if is_light else "rgba(255,255,255,12)"
+    hover_color = "rgb(24,24,27)" if is_light else "rgb(243,243,243)"
     return f"""
     QPushButton {{
         background: {bg};
@@ -534,7 +600,8 @@ def _btn_ghost_style() -> str:
         border: {border};
         border-radius: 6px;
         font-size: 11px;
-        padding: 0 10px;
+        font-family: 'Segoe UI Variable Text';
+        padding: 0 12px;
     }}
     QPushButton:hover {{ background: {hover_bg}; color: {hover_color}; }}
     QPushButton:pressed {{ background: {bg}; }}
@@ -543,16 +610,19 @@ def _btn_ghost_style() -> str:
 
 def _btn_icon_style() -> str:
     is_light = theme.is_light_theme()
-    color = "rgb(115,115,125)" if is_light else "rgb(140,160,180)"
-    hover_color = "rgb(8,145,178)" if is_light else "rgb(34,211,238)"
+    color = "rgb(113,113,122)" if is_light else "rgb(161,161,170)"
+    hover_color = "rgb(0,120,212)" if is_light else "rgb(96,205,255)"
+    hover_bg = "rgba(0,0,0,8)" if is_light else "rgba(255,255,255,8)"
     return f"""
     QPushButton {{
         background: transparent;
         color: {color};
         border: none;
-        font-size: 11px;
+        border-radius: 4px;
     }}
     QPushButton:hover {{
         color: {hover_color};
+        background: {hover_bg};
     }}
     """
+
