@@ -6,8 +6,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from screen_capture import capture_and_query
-
 import runtime_trace
 from . import registry
 

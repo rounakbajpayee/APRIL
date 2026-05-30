@@ -4,7 +4,6 @@ vision.py - Screen inspection intent handling.
 
 from __future__ import annotations
 
-import importlib
 from typing import Any
 
 from .tool_interface import IntentPlan, IntentResult
@@ -19,7 +18,7 @@ TRIGGERS = [
     "read my screen",
     "take a screenshot",
 ]
-OLLAMA_DESCRIPTION = "Inspect the current screen or answer a question about it"
+OLLAMA_DESCRIPTION = "Inspect the current screen or answer a question about it using local vision"
 EXAMPLES = [
     {
         "text": "what's on my screen",
@@ -59,8 +58,8 @@ def execute(
         action.get("question") or action.get("text") or context.get("text") or ""
     ).strip()
     try:
-        intent_package = importlib.import_module("intent")
-        reply = intent_package.capture_and_query(question, config)
+        from screen_capture import capture_and_query
+        reply = capture_and_query(question, config)
     except Exception as exc:
         import runtime_trace
 
