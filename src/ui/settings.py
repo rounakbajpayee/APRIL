@@ -5,7 +5,7 @@ SettingsPanel — mirror of the React settings system.
 Fluent Design aesthetic adapting dynamically to Light/Dark system themes.
 """
 
-from __future__ import annotations
+import os
 from PyQt6.QtCore import Qt, QPropertyAnimation, QEasingCurve
 from PyQt6.QtGui import QPainter, QColor, QPen, QPainterPath, QLinearGradient
 from PyQt6.QtWidgets import (
@@ -321,21 +321,15 @@ class SettingsPanel(QWidget):
             btn = QPushButton(cat["label"])
             btn.setCheckable(True)
             btn.setFixedHeight(32)
+            btn.setStyleSheet(_cat_btn_css())
             btn.clicked.connect(lambda _, cid=cat["id"]: self._select(cid))
             self._cat_buttons[cat["id"]] = btn
             self._cat_layout.insertWidget(self._cat_layout.count() - 1, btn)
-
-        # Style new buttons
-        for cid, btn in self._cat_buttons.items():
-            btn.setStyleSheet(
-                _cat_btn_active() if cid == self._active else _cat_btn_style()
-            )
 
     def _select(self, cat_id: str):
         self._active = cat_id
         for cid, btn in self._cat_buttons.items():
             btn.setChecked(cid == cat_id)
-            btn.setStyleSheet(_cat_btn_active() if cid == cat_id else _cat_btn_style())
 
         cat = next((c for c in self._categories if c["id"] == cat_id), None)
         if cat:
@@ -701,56 +695,81 @@ def _info_row(label: str, value: str) -> QWidget:
 def _input_style() -> str:
     is_light = theme.is_light_theme()
     bg = "rgba(0,0,0,8)" if is_light else "rgba(255,255,255,8)"
-    border = (
-        "1px solid rgba(0,0,0,20)" if is_light else "1px solid rgba(255,255,255,20)"
-    )
-    color = "rgb(30,30,42)" if is_light else "rgb(220,240,255)"
-    focus = "rgba(8,145,178,80)" if is_light else "rgba(34,211,238,80)"
+    border = "rgba(0,0,0,24)" if is_light else "rgba(255,255,255,20)"
+    color = "rgb(24, 24, 27)" if is_light else "rgb(243, 243, 243)"
+    focus_border = "rgb(0, 120, 212)" if is_light else "rgb(96, 205, 255)"
     return f"""
     QLineEdit {{
         background: {bg};
-        border: {border};
+        border: 1px solid {border};
         border-radius: 6px;
         color: {color};
         font-size: 11px;
-        font-family: 'Segoe UI', sans-serif;
-        padding: 0 8px;
+        font-family: 'Segoe UI Variable Text', 'Segoe UI';
+        padding: 4px 10px;
         height: 28px;
     }}
-    QLineEdit:focus {{ border-color: {focus}; }}
+    QLineEdit:hover {{
+        background: {"rgba(0,0,0,12)" if is_light else "rgba(255,255,255,12)"};
+    }}
+    QLineEdit:focus {{
+        border-color: {focus_border};
+        border-bottom: 2px solid {focus_border};
+    }}
     """
 
 
 def _combo_style() -> str:
     is_light = theme.is_light_theme()
     bg = "rgba(0,0,0,8)" if is_light else "rgba(255,255,255,8)"
-    border = (
-        "1px solid rgba(0,0,0,20)" if is_light else "1px solid rgba(255,255,255,20)"
-    )
-    color = "rgb(30,30,42)" if is_light else "rgb(220,240,255)"
-    focus = "rgba(8,145,178,80)" if is_light else "rgba(34,211,238,80)"
-    popup_bg = "rgb(240,240,245)" if is_light else "rgb(18,18,28)"
-    popup_border = (
-        "1px solid rgba(0,0,0,20)" if is_light else "1px solid rgba(255,255,255,20)"
-    )
-    popup_sel = "rgba(8,145,178,40)" if is_light else "rgba(34,211,238,40)"
+    border = "rgba(0,0,0,24)" if is_light else "rgba(255,255,255,20)"
+    color = "rgb(24, 24, 27)" if is_light else "rgb(243, 243, 243)"
+    focus = "rgba(0, 120, 212, 160)"
+    popup_bg = "rgb(243, 243, 243)" if is_light else "rgb(32, 32, 32)"
+    popup_border = "1px solid rgba(0,0,0,24)" if is_light else "1px solid rgba(255,255,255,20)"
+    popup_sel = "rgba(0, 120, 212, 16)" if is_light else "rgba(255, 255, 255, 12)"
+    
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    chevron_filename = "chevron_light.svg" if is_light else "chevron_dark.svg"
+    chevron_svg = os.path.join(base_dir, "assets", chevron_filename).replace("\\", "/")
+    
     return f"""
     QComboBox {{
         background: {bg};
-        border: {border};
+        border: 1px solid {border};
         border-radius: 6px;
         color: {color};
         font-size: 11px;
-        font-family: 'Segoe UI', sans-serif;
-        padding: 0 8px;
+        font-family: 'Segoe UI Variable Text', 'Segoe UI';
+        padding: 4px 28px 4px 10px;
+        min-height: 20px;
     }}
-    QComboBox:focus {{ border-color: {focus}; }}
-    QComboBox::drop-down {{ border: none; width: 20px; }}
+    QComboBox:hover {{
+        background: {"rgba(0,0,0,12)" if is_light else "rgba(255,255,255,12)"};
+    }}
+    QComboBox:focus {{
+        border-color: {focus};
+        border-bottom: 2px solid {focus};
+    }}
+    QComboBox::drop-down {{
+        subcontrol-origin: padding;
+        subcontrol-position: top right;
+        width: 24px;
+        border-left: none;
+    }}
+    QComboBox::down-arrow {{
+        image: url("{chevron_svg}");
+        width: 12px;
+        height: 12px;
+    }}
     QComboBox QAbstractItemView {{
-        background: {popup_bg};
+        background-color: {popup_bg};
         border: {popup_border};
+        border-radius: 8px;
         color: {color};
         selection-background-color: {popup_sel};
+        selection-color: {color};
+        padding: 4px;
     }}
     """
 
@@ -758,112 +777,155 @@ def _combo_style() -> str:
 def _slider_style() -> str:
     is_light = theme.is_light_theme()
     groove = "rgba(0,0,0,15)" if is_light else "rgba(255,255,255,15)"
-    handle = "rgb(8,145,178)" if is_light else "rgb(34,211,238)"
-    subpage = "rgba(8,145,178,120)" if is_light else "rgba(34,211,238,120)"
+    handle = "rgb(0, 120, 212)" if is_light else "rgb(96, 205, 255)"
+    handle_border = "rgb(255, 255, 255)" if is_light else "rgb(32, 32, 32)"
+    subpage = "rgb(0, 120, 212)" if is_light else "rgb(96, 205, 255)"
     return f"""
     QSlider::groove:horizontal {{
         height: 4px;
         background: {groove};
         border-radius: 2px;
     }}
-    QSlider::handle:horizontal {{
-        width: 12px; height: 12px;
-        margin: -4px 0;
-        border-radius: 6px;
-        background: {handle};
-    }}
     QSlider::sub-page:horizontal {{
         background: {subpage};
         border-radius: 2px;
+    }}
+    QSlider::handle:horizontal {{
+        background: {handle};
+        border: 2px solid {handle_border};
+        width: 12px;
+        height: 12px;
+        margin: -4px 0;
+        border-radius: 8px;
+    }}
+    QSlider::handle:horizontal:hover {{
+        background: {handle};
+        width: 14px;
+        height: 14px;
+        margin: -5px 0;
+        border-radius: 9px;
     }}
     """
 
 
 def _checkbox_style() -> str:
     is_light = theme.is_light_theme()
-    border = (
-        "1px solid rgba(0,0,0,30)" if is_light else "1px solid rgba(255,255,255,30)"
-    )
+    border = "rgba(0,0,0,35)" if is_light else "rgba(255,255,255,35)"
+    hover_border = "rgba(0,0,0,60)" if is_light else "rgba(255,255,255,60)"
     bg = "rgba(0,0,0,8)" if is_light else "rgba(255,255,255,8)"
-    checked = "rgb(8,145,178)" if is_light else "rgb(34,211,238)"
+    checked_bg = "rgb(0, 120, 212)" if is_light else "rgb(96, 205, 255)"
+    checked_border = "rgb(0, 120, 212)" if is_light else "rgb(96, 205, 255)"
+    
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    svg_checkmark = os.path.join(base_dir, "assets", "checkmark.svg").replace("\\", "/")
+    
     return f"""
-    QCheckBox::indicator {{
-        width: 16px; height: 16px; border-radius: 4px;
-        border: {border}; background: {bg};
-    }}
-    QCheckBox::indicator:checked {{ background: {checked}; border-color: {checked}; }}
-    """
-
-
-def _cat_btn_style() -> str:
-    is_light = theme.is_light_theme()
-    color = "rgb(115,115,125)" if is_light else "rgb(113,113,122)"
-    hover_bg = "rgba(0,0,0,8)" if is_light else "rgba(255,255,255,8)"
-    hover_color = "rgb(30,30,42)" if is_light else "rgb(200,220,240)"
-    return f"""
-    QPushButton {{
+    QCheckBox {{
+        spacing: 8px;
+        color: {'rgb(24, 24, 27)' if is_light else 'rgb(243, 243, 243)'};
+        font-size: 11px;
+        font-family: 'Segoe UI Variable Text', 'Segoe UI';
         background: transparent;
-        color: {color};
-        border: none;
-        border-radius: 6px;
-        font-size: 12px;
-        font-family: 'Segoe UI Variable Display', 'Segoe UI';
-        text-align: left;
-        padding: 0 10px;
     }}
-    QPushButton:hover {{ background: {hover_bg}; color: {hover_color}; }}
+    QCheckBox::indicator {{
+        width: 16px;
+        height: 16px;
+        border: 1px solid {border};
+        border-radius: 4px;
+        background: {bg};
+    }}
+    QCheckBox::indicator:hover {{
+        border-color: {hover_border};
+        background: {"rgba(0,0,0,12)" if is_light else "rgba(255,255,255,12)"};
+    }}
+    QCheckBox::indicator:checked {{
+        background: {checked_bg};
+        border-color: {checked_border};
+        image: url("{svg_checkmark}");
+    }}
+    QCheckBox::indicator:checked:hover {{
+        background: {"rgb(0, 99, 177)" if is_light else "rgb(60, 180, 255)"};
+        border-color: {"rgb(0, 99, 177)" if is_light else "rgb(60, 180, 255)"};
+    }}
     """
 
 
-def _cat_btn_active() -> str:
+def _cat_btn_css() -> str:
     is_light = theme.is_light_theme()
-    bg = "rgba(8,145,178,25)" if is_light else "rgba(34,211,238,25)"
-    color = "rgb(8,145,178)" if is_light else "rgb(34,211,238)"
+    color = "rgb(82, 82, 91)" if is_light else "rgb(161, 161, 170)"
+    sel_color = "rgb(0, 120, 212)" if is_light else "rgb(96, 205, 255)"
+    hover_bg = "rgba(0, 0, 0, 10)" if is_light else "rgba(255, 255, 255, 10)"
+    active_bg = "rgba(0, 120, 212, 16)" if is_light else "rgba(255, 255, 255, 12)"
+    txt = "rgb(24, 24, 27)" if is_light else "rgb(243, 243, 243)"
+    border_c = "rgba(0, 120, 212, 220)" if is_light else "rgba(96, 205, 255, 220)"
     return f"""
-    QPushButton {{
-        background: {bg};
-        color: {color};
-        border: none;
-        border-radius: 6px;
-        font-size: 12px;
-        font-family: 'Segoe UI Variable Display', 'Segoe UI';
-        text-align: left;
-        padding: 0 10px;
-    }}
+        QPushButton {{
+            background: transparent;
+            color: {color};
+            border: none;
+            border-radius: 5px;
+            font-size: 11px;
+            font-family: 'Segoe UI Variable Text', 'Segoe UI';
+            text-align: left;
+            padding: 8px 12px;
+        }}
+        QPushButton:hover {{
+            background: {hover_bg};
+            color: {txt};
+        }}
+        QPushButton:checked {{
+            background: {active_bg};
+            color: {sel_color};
+            font-weight: 600;
+            border-left: 3px solid {border_c};
+            border-top-left-radius: 0px;
+            border-bottom-left-radius: 0px;
+            padding-left: 9px;
+        }}
     """
 
 
 def _btn_ghost_style() -> str:
     is_light = theme.is_light_theme()
-    bg = "rgba(0,0,0,8)" if is_light else "rgba(255,255,255,8)"
-    border = (
-        "1px solid rgba(0,0,0,20)" if is_light else "1px solid rgba(255,255,255,20)"
-    )
-    color = "rgb(80,80,95)" if is_light else "rgb(180,200,220)"
-    hover_bg = "rgba(0,0,0,15)" if is_light else "rgba(255,255,255,15)"
+    bg = "rgba(0,0,0,6)" if is_light else "rgba(255,255,255,6)"
+    border = "rgba(0,0,0,15)" if is_light else "rgba(255,255,255,12)"
+    color = "rgb(24, 24, 27)" if is_light else "rgb(243, 243, 243)"
+    hover_bg = "rgba(0,0,0,12)" if is_light else "rgba(255,255,255,10)"
     return f"""
     QPushButton {{
         background: {bg};
-        color: {color};
-        border: {border};
+        border: 1px solid {border};
         border-radius: 6px;
+        color: {color};
         font-size: 11px;
+        font-family: 'Segoe UI Variable Text', 'Segoe UI';
+        padding: 4px 12px;
     }}
-    QPushButton:hover {{ background: {hover_bg}; }}
+    QPushButton:hover {{
+        background: {hover_bg};
+    }}
+    QPushButton:pressed {{
+        background: {bg};
+    }}
     """
 
 
 def _btn_warn_style() -> str:
     is_light = theme.is_light_theme()
-    color = "rgb(115,115,125)" if is_light else "rgb(113,113,122)"
+    color = "rgb(113, 113, 122)" if is_light else "rgb(161, 161, 170)"
+    hover_color = "rgb(220, 53, 69)"
     return f"""
     QPushButton {{
         background: transparent;
         color: {color};
         border: none;
         font-size: 11px;
-        font-family: 'Segoe UI', sans-serif;
+        font-family: 'Segoe UI Variable Text', 'Segoe UI';
         text-align: left;
+        padding: 4px 8px;
     }}
-    QPushButton:hover {{ color: rgb(251,191,36); }}
+    QPushButton:hover {{
+        color: {hover_color};
+        text-decoration: underline;
+    }}
     """
