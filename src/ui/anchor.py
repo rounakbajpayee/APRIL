@@ -104,7 +104,7 @@ class AmbientAnchor(QWidget):
         if state == APRILState.DORMANT:
             cx = self.width() // 2
             cy = self.height() // 2
-            dot_r = 5  # Allow a tiny bit of padding for anti-aliasing edge
+            dot_r = 6  # Slightly larger for touch/click targets, but still compact
             self.setMask(
                 QRegion(
                     cx - dot_r,
@@ -115,7 +115,10 @@ class AmbientAnchor(QWidget):
                 )
             )
         else:
-            self.setMask(QRegion(pad, pad, orb, orb, QRegion.RegionType.Ellipse))
+            # Clear the mask completely for active states.
+            # This enables beautiful anti-aliased borders and translucent glow/shadows
+            # that extend beyond the core orb boundary into the padded region.
+            self.clearMask()
 
     def _force_topmost(self):
         """Win32 SetWindowPos HWND_TOPMOST — survives z-order fights."""
@@ -156,13 +159,13 @@ class AmbientAnchor(QWidget):
     def _tick(self):
         state = self._core.state
         speeds = {
-            APRILState.DORMANT: 0.005,
-            APRILState.LISTENING: 0.012,
-            APRILState.THINKING: 0.018,
-            APRILState.SPEAKING: 0.025,
-            APRILState.ACTING: 0.015,
-            APRILState.WARNING: 0.020,
-            APRILState.ERROR: 0.030,
+            APRILState.DORMANT: 0.004,
+            APRILState.LISTENING: 0.010,
+            APRILState.THINKING: 0.015,
+            APRILState.SPEAKING: 0.022,
+            APRILState.ACTING: 0.012,
+            APRILState.WARNING: 0.016,
+            APRILState.ERROR: 0.026,
         }
         self._phase = (self._phase + speeds.get(state, 0.005)) % 1.0
 
@@ -231,22 +234,27 @@ class AmbientAnchor(QWidget):
 
         # Fluent thin high-contrast border
         pen = QPen(theme.BORDER)
-        pen.setWidth(1)
+        pen.setWidthF(1.0)
         p.setPen(pen)
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawEllipse(int(cx - r), int(cy - r), int(r * 2), int(r * 2))
 
         p.end()
 
-        p.end()
-
     def _draw_glow(self, p: QPainter, cx, cy, r, color: QColor):
-        glow_r = r + 10 + math.sin(self._phase * math.tau) * 4
+        # Premium radial gradient creating a soft ambient aura
+        glow_r = r + 14 + math.sin(self._phase * math.tau) * 3
         grad = QRadialGradient(cx, cy, glow_r)
-        c = QColor(color)
-        c.setAlpha(60)
-        grad.setColorAt(0.0, c)
+        
+        c_center = QColor(color)
+        c_center.setAlpha(65)
+        c_mid = QColor(color)
+        c_mid.setAlpha(25)
+        
+        grad.setColorAt(0.0, c_center)
+        grad.setColorAt(0.5, c_mid)
         grad.setColorAt(1.0, QColor(0, 0, 0, 0))
+        
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QBrush(grad))
         p.drawEllipse(
@@ -254,9 +262,10 @@ class AmbientAnchor(QWidget):
         )
 
     def _draw_base(self, p: QPainter, cx, cy, r, color: QColor):
-        grad = QRadialGradient(cx, cy - r * 0.3, r * 1.2)
-        light = QColor(255, 255, 255, 18)
-        dark = QColor(10, 10, 20, 180)
+        # Translucent glass shine top-down gradient
+        grad = QLinearGradient(cx, cy - r, cx, cy + r)
+        light = QColor(255, 255, 255, 25)
+        dark = QColor(15, 15, 25, 140) if not theme.is_light_theme() else QColor(240, 240, 240, 60)
         grad.setColorAt(0.0, light)
         grad.setColorAt(1.0, dark)
         p.setPen(Qt.PenStyle.NoPen)
@@ -265,19 +274,33 @@ class AmbientAnchor(QWidget):
 
     def _draw_dormant(self, p: QPainter, cx, cy, r, color: QColor):
         # A soft breathing opacity pulse (alpha: 130 to 210)
-        alpha = int(170 + math.sin(self._phase * math.tau) * 40)
+        alpha = int(160 + math.sin(self._phase * math.tau) * 45)
         c = QColor(color)
         c.setAlpha(alpha)
         p.setPen(Qt.PenStyle.NoPen)
+        
+        # Soft glow behind dormant dot
+        grad = QRadialGradient(cx, cy, 8)
+        c_glow = QColor(color)
+        c_glow.setAlpha(int(alpha * 0.3))
+        grad.setColorAt(0.0, c_glow)
+        grad.setColorAt(1.0, QColor(0, 0, 0, 0))
+        p.setBrush(QBrush(grad))
+        p.drawEllipse(int(cx - 8), int(cy - 8), 16, 16)
+        
         p.setBrush(QBrush(c))
-        dot_r = 3.5
+        dot_r = 4.0
         p.drawEllipse(int(cx - dot_r), int(cy - dot_r), int(dot_r * 2), int(dot_r * 2))
 
     def _draw_listening(self, p: QPainter, cx, cy, r, color: QColor):
+        # Clean ripple effect with easing
         for i in range(3):
-            offset = (self._phase + i / 3) % 1.0
-            ring_r = r * 0.3 + offset * r * 0.65
-            alpha = int((1 - offset) * 140)
+            offset = (self._phase + i / 3.0) % 1.0
+            # Ease out function: 1 - (1 - x)^3
+            ease_offset = 1.0 - math.pow(1.0 - offset, 3.0)
+            ring_r = r * 0.4 + ease_offset * r * 0.65
+            alpha = int((1.0 - ease_offset) * 150)
+            
             c = QColor(color)
             c.setAlpha(alpha)
             pen = QPen(c)
@@ -289,22 +312,31 @@ class AmbientAnchor(QWidget):
             )
 
     def _draw_thinking(self, p: QPainter, cx, cy, r, color: QColor):
+        # Windows 11 style elegant gradient loading arc
         angle = self._phase * 360
         arc_r = r * 0.68
-        pen = QPen(QColor(color.red(), color.green(), color.blue(), 40))
-        pen.setWidthF(1.5)
+        
+        # Draw soft background circle
+        bg_c = QColor(color)
+        bg_c.setAlpha(30)
+        pen = QPen(bg_c)
+        pen.setWidthF(2.0)
         p.setPen(pen)
         p.setBrush(Qt.BrushStyle.NoBrush)
         rect = QRect(int(cx - arc_r), int(cy - arc_r), int(arc_r * 2), int(arc_r * 2))
         p.drawEllipse(rect)
 
+        # Draw bright spinning sweep arc
         bright_pen = QPen(color)
-        bright_pen.setWidthF(2.0)
+        bright_pen.setWidthF(2.5)
         bright_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         p.setPen(bright_pen)
-        p.drawArc(rect, int((angle % 360) * 16), int(90 * 16))
+        # Bounding sweep expands and shrinks dynamically
+        sweep = 45 + int(math.sin(self._phase * math.tau * 2) * 25)
+        p.drawArc(rect, int((angle % 360) * 16), int(sweep * 16))
 
     def _draw_speaking(self, p: QPainter, cx, cy, r, color: QColor):
+        # Fluid spring voice waveform visualizer
         bar_count = 5
         bar_w = 2.5
         gap = 4.0
@@ -313,22 +345,24 @@ class AmbientAnchor(QWidget):
 
         for i in range(bar_count):
             bx = x0 + i * (bar_w + gap)
+            # Staggered wave heights
             h = (
-                r * 0.3
-                + math.sin(self._phase * math.tau * (1 + i * 0.4) + i) * r * 0.45
+                r * 0.25
+                + math.abs(math.sin(self._phase * math.tau + i * 0.6)) * r * 0.55
             )
             c = QColor(color)
-            c.setAlpha(180 + int(i * 12))
+            c.setAlpha(170 + int(i * 15))
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(QBrush(c))
             p.drawRoundedRect(int(bx), int(cy - h / 2), int(bar_w), int(h), 1, 1)
 
     def _draw_acting(self, p: QPainter, cx, cy, r, color: QColor):
+        # Modern scanning system arc
         arc_r = r * 0.65
         angle = self._phase * 360
 
         base = QColor(color)
-        base.setAlpha(35)
+        base.setAlpha(40)
         pen = QPen(base)
         pen.setWidthF(1.5)
         pen.setStyle(Qt.PenStyle.DashLine)
@@ -342,13 +376,14 @@ class AmbientAnchor(QWidget):
         bright.setCapStyle(Qt.PenCapStyle.RoundCap)
         bright.setStyle(Qt.PenStyle.SolidLine)
         p.setPen(bright)
-        p.drawArc(rect, int((angle % 360) * 16), int(60 * 16))
+        p.drawArc(rect, int((angle % 360) * 16), int(75 * 16))
 
     def _draw_pulse(self, p: QPainter, cx, cy, r, color: QColor, fast=False):
-        freq = 2 if fast else 1
-        pulse = (math.sin(self._phase * math.tau * freq) + 1) / 2
-        ring_r = r * 0.3 + pulse * r * 0.6
-        alpha = int((1 - pulse) * 160)
+        freq = 2.2 if fast else 1.2
+        pulse = (math.sin(self._phase * math.tau * freq) + 1.0) / 2.0
+        ring_r = r * 0.35 + pulse * r * 0.55
+        alpha = int((1.0 - pulse) * 170)
+        
         c = QColor(color)
         c.setAlpha(alpha)
         pen = QPen(c)
@@ -359,9 +394,9 @@ class AmbientAnchor(QWidget):
             int(cx - ring_r), int(cy - ring_r), int(ring_r * 2), int(ring_r * 2)
         )
 
-        dot_r = 4 + pulse * 2
+        dot_r = 4.5 + pulse * 1.5
         c2 = QColor(color)
-        c2.setAlpha(200)
+        c2.setAlpha(210)
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QBrush(c2))
         p.drawEllipse(int(cx - dot_r), int(cy - dot_r), int(dot_r * 2), int(dot_r * 2))
@@ -394,7 +429,7 @@ class AmbientAnchor(QWidget):
         from PyQt6.QtWidgets import QMenu
 
         menu = QMenu(self)
-        menu.setStyleSheet(_MENU_STYLE)
+        menu.setStyleSheet(_menu_style())
 
         menu.addSection("Mode")
         for label, m in [
@@ -455,18 +490,87 @@ class AmbientAnchor(QWidget):
         pass  # orb visible in all modes
 
 
-_MENU_STYLE = """
-QMenu {
-    background: rgba(10,10,20,230);
-    border: 1px solid rgba(255,255,255,25);
-    border-radius: 10px;
-    padding: 4px;
-    color: rgb(220,240,255);
-    font-size: 12px;
-}
-QMenu::item { padding: 6px 18px 6px 12px; border-radius: 6px; }
-QMenu::item:selected { background: rgba(34,211,238,35); }
-QMenu::item:checked { color: rgb(34,211,238); }
-QMenu::separator { height: 1px; background: rgba(255,255,255,15); margin: 3px 0; }
-QMenu::section { color: rgba(113,113,122,255); font-size: 10px; padding: 4px 12px 2px; }
-"""
+def _menu_style() -> str:
+    """Dynamic, theme-adaptive context menu stylesheet mimicking Windows 11 Fluent design."""
+    is_light = theme.is_light_theme()
+    if is_light:
+        return """
+        QMenu {
+            background: rgba(243, 243, 243, 220);
+            border: 1px solid rgba(0, 0, 0, 24);
+            border-radius: 8px;
+            padding: 6px;
+            color: rgb(24, 24, 27);
+            font-family: 'Segoe UI Variable Text', 'Segoe UI';
+            font-size: 12px;
+        }
+        QMenu::item {
+            padding: 6px 24px 6px 16px;
+            border-radius: 4px;
+            margin: 1px 0;
+            background: transparent;
+        }
+        QMenu::item:selected {
+            background: rgba(0, 0, 0, 10);
+            color: rgb(24, 24, 27);
+        }
+        QMenu::item:checked {
+            color: rgb(0, 120, 212);
+            font-weight: 600;
+        }
+        QMenu::separator {
+            height: 1px;
+            background: rgba(0, 0, 0, 15);
+            margin: 4px 6px;
+        }
+        QMenu::section {
+            color: rgba(0, 0, 0, 120);
+            font-size: 10px;
+            font-family: 'Segoe UI Variable Small';
+            font-weight: 600;
+            padding: 4px 16px 2px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        """
+    else:
+        return """
+        QMenu {
+            background: rgba(32, 32, 32, 220);
+            border: 1px solid rgba(255, 255, 255, 20);
+            border-radius: 8px;
+            padding: 6px;
+            color: rgb(243, 243, 243);
+            font-family: 'Segoe UI Variable Text', 'Segoe UI';
+            font-size: 12px;
+        }
+        QMenu::item {
+            padding: 6px 24px 6px 16px;
+            border-radius: 4px;
+            margin: 1px 0;
+            background: transparent;
+        }
+        QMenu::item:selected {
+            background: rgba(255, 255, 255, 12);
+            color: rgb(243, 243, 243);
+        }
+        QMenu::item:checked {
+            color: rgb(96, 205, 255);
+            font-weight: 600;
+        }
+        QMenu::separator {
+            height: 1px;
+            background: rgba(255, 255, 255, 20);
+            margin: 4px 6px;
+        }
+        QMenu::section {
+            color: rgba(255, 255, 255, 140);
+            font-size: 10px;
+            font-family: 'Segoe UI Variable Small';
+            font-weight: 600;
+            padding: 4px 16px 2px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        """
+
