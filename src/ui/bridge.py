@@ -187,6 +187,9 @@ class APRILBridge(QObject):
     def _apply_transcript(self, text: str) -> None:
         if self._overlay is not None:
             self._overlay.set_transcript(text)
+        if self._workspace is not None and hasattr(self._workspace, "add_transcript"):
+            self._workspace.add_transcript(text)
+
 
     def _apply_task(self, text: str) -> None:
         if self._overlay is not None:
