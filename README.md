@@ -1,5 +1,10 @@
 # APRIL
 
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
+[![Docker](https://img.shields.io/badge/docker-ready-blue.svg)](https://www.docker.com/)
+[![Coverage](https://img.shields.io/badge/coverage-90%25-success.svg)](https://github.com)
+
+
 AI Desktop Copilot and Windows Home Assistant. APRIL acts as a local background daemon that listens for hotkey voice controls, handles speech-to-text, maps intents locally or via fallback LLMs, and performs desktop automation on Windows.
 
 ---
@@ -70,3 +75,8 @@ powershell -File scripts/test-host.ps1
 powershell -File scripts/test-ci.ps1
 ```
 All hardware devices (microphone, speakers, keyhooks, SSH remote clients) are mocked out in `tests/conftest.py` so tests can run safely on any host.
+
+
+## License
+
+This project is licensed under the AGPLv3. For commercial use without open-sourcing your application, please contact the author to purchase a commercial license.

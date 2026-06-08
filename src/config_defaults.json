@@ -33,7 +33,7 @@
   "jellyfin_host": "http://media.home.lan",
   "jellyfin_api_key": "",
   "vision_host": "http://192.168.0.234:8004",
-  "vision_timeout_seconds": 30,
+  "vision_timeout_seconds": 90,
   "audio_sample_rate": 16000,
   "audio_channels": 1,
   "audio_chunk_size": 1024,

@@ -68,15 +68,6 @@ except ImportError:
     paramiko_mock = MagicMock()
     sys.modules["paramiko"] = paramiko_mock
 
-# ---------------------------------------------------------
-# Google Generative AI Mock
-# ---------------------------------------------------------
-try:
-    import google.generativeai
-except ImportError:
-    genai_mock = MagicMock()
-    sys.modules["google.generativeai"] = genai_mock
-
 # Initialize tests SQLite database
 import database
 database.init_db()
