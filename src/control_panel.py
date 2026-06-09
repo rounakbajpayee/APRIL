@@ -42,14 +42,14 @@ class ControlPanelHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.end_headers()
             self.wfile.write(HTML_DASHBOARD.encode("utf-8"))
-            
+
         elif path == "/api/workspaces":
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             workspaces = database.get_workspaces()
             self.wfile.write(json.dumps(workspaces).encode("utf-8"))
-            
+
         elif path == "/api/artifacts":
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -57,7 +57,7 @@ class ControlPanelHandler(BaseHTTPRequestHandler):
             w_id = params.get("workspace_id", [None])[0]
             artifacts = database.get_artifacts(w_id)
             self.wfile.write(json.dumps(artifacts).encode("utf-8"))
-            
+
         elif path == "/api/artifact":
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -111,7 +111,9 @@ class ControlPanelHandler(BaseHTTPRequestHandler):
             if text and _bridge_ref is not None:
                 # Dispatch transcript event to the bridge (runs thread-safe in PyQt6)
                 _bridge_ref.set_transcript(text)
-                self._send_json({"ok": True, "message": "Dictation dispatched to Quick Peek card."})
+                self._send_json(
+                    {"ok": True, "message": "Dictation dispatched to Quick Peek card."}
+                )
             else:
                 self._send_json({"ok": False, "message": "Missing dictation payload."})
 
@@ -172,7 +174,9 @@ class ControlPanelHandler(BaseHTTPRequestHandler):
                 database.add_log(art_id, msg)
                 self._send_json({"ok": True})
             else:
-                self._send_json({"ok": False, "message": "Missing artifact_id or log message."})
+                self._send_json(
+                    {"ok": False, "message": "Missing artifact_id or log message."}
+                )
 
         elif path == "/api/settings":
             # Modify active configuration Settings (partial updates supported)
@@ -186,10 +190,10 @@ class ControlPanelHandler(BaseHTTPRequestHandler):
             theme.ACCENT_CUSTOM_HEX = custom_hex
             theme.MICA_OPACITY = opacity
             theme.MICA_BLUR_RADIUS = blur
-            
+
             if preset and preset in theme.PRESETS:
                 theme.ACCENT_PRESET = preset
-                
+
             theme.save_theme_config()
             theme.refresh_theme()
 
@@ -201,7 +205,9 @@ class ControlPanelHandler(BaseHTTPRequestHandler):
                 if hasattr(_bridge_ref, "_core"):
                     _bridge_ref._core.state_changed.emit(_bridge_ref._core.state)
 
-            self._send_json({"ok": True, "message": "Config saved and widgets updated."})
+            self._send_json(
+                {"ok": True, "message": "Config saved and widgets updated."}
+            )
 
         else:
             self.send_response(404)

@@ -9,6 +9,7 @@ import os
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE_DIR)
 
+
 def main():
     print("[test] importing runtime modules...")
     from debug_log import log_event
@@ -44,7 +45,10 @@ def main():
 
     bridge.attach_overlay(overlay)
     import webbrowser
-    core.settings_requested.connect(lambda: webbrowser.open("http://localhost:8080/#settings"))
+
+    core.settings_requested.connect(
+        lambda: webbrowser.open("http://localhost:8080/#settings")
+    )
     print("[test] bridge wired")
 
     anchor.show()
@@ -74,5 +78,6 @@ def main():
     app.exec()
     print("[test] done")
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()

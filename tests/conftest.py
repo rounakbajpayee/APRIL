@@ -70,5 +70,5 @@ except ImportError:
 
 # Initialize tests SQLite database
 import database
-database.init_db()
 
+database.init_db()

@@ -100,7 +100,9 @@ class TestExecution(unittest.TestCase):
             mock.patch(
                 "intent.media_intent.handle_media", return_value="Media action ok."
             ),
-            mock.patch("screen_capture.capture_and_query", return_value="Vision action ok."),
+            mock.patch(
+                "screen_capture.capture_and_query", return_value="Vision action ok."
+            ),
             mock.patch(
                 "intent.shell.execute_session_command",
                 return_value={

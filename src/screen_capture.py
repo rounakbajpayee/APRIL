@@ -18,6 +18,7 @@ def _downscale_png(img_bytes: bytes, max_width: int = _VLM_MAX_WIDTH) -> bytes:
     try:
         import cv2
         import numpy as np
+
         arr = np.frombuffer(img_bytes, np.uint8)
         img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
         if img is None:
@@ -26,7 +27,9 @@ def _downscale_png(img_bytes: bytes, max_width: int = _VLM_MAX_WIDTH) -> bytes:
         if w <= max_width:
             return img_bytes
         scale = max_width / w
-        resized = cv2.resize(img, (max_width, int(h * scale)), interpolation=cv2.INTER_AREA)
+        resized = cv2.resize(
+            img, (max_width, int(h * scale)), interpolation=cv2.INTER_AREA
+        )
         ok, buf = cv2.imencode(".png", resized)
         return buf.tobytes() if ok else img_bytes
     except Exception:
@@ -58,7 +61,9 @@ def capture_and_query(question: str, config: dict[str, Any]) -> str:
         response = requests.post(
             f"{vision_host}/v1/vision/analyze",
             files={"file": ("screenshot.png", io.BytesIO(img_bytes), "image/png")},
-            params={"prompt": f"The user is asking about their current screen: {question} Answer based only on what is visible in this screenshot."},
+            params={
+                "prompt": f"The user is asking about their current screen: {question} Answer based only on what is visible in this screenshot."
+            },
             timeout=float(config.get("vision_timeout_seconds", 90)),
         )
         response.raise_for_status()

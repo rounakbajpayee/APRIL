@@ -996,6 +996,7 @@ def main():
     trace_startup("main() entered")
     config = load_config()
     import database
+
     database.init_db()
     global _system_prompt_hash
     from brain import _system_prompt
@@ -1049,15 +1050,19 @@ def main():
     anchor = AmbientAnchor(core)
     overlay = TransitionalOverlay(core)
     bridge.attach_overlay(overlay)
-    
+
     import webbrowser
-    core.settings_requested.connect(lambda: webbrowser.open("http://localhost:8080/#settings"))
+
+    core.settings_requested.connect(
+        lambda: webbrowser.open("http://localhost:8080/#settings")
+    )
     anchor.show()
     anchor._force_topmost()
     bridge.set_state("idle")
     _bridge_ref = bridge
     import threading
     from control_panel import start_control_panel
+
     threading.Thread(target=start_control_panel, args=(bridge,), daemon=True).start()
     trace_startup("surface system started")
     print("[main] surface system started")

@@ -42,7 +42,7 @@ class TransitionalOverlay(QWidget):
         super().__init__(parent)
         self._core = core
         self.bridge = None  # Attached via bridge
-        
+
         # 5-second auto-dismiss timer
         self._dismiss_timer = QTimer(self)
         self._dismiss_timer.setInterval(5000)
@@ -64,7 +64,7 @@ class TransitionalOverlay(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setStyleSheet("background: transparent;")
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
-        
+
         # Frameless, stay-on-top, tool window that doesn't accept active keyboard focus
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
@@ -82,7 +82,7 @@ class TransitionalOverlay(QWidget):
         # Base Frame (Mica glassmorphism style)
         self._base_frame = theme.MicaFrame()
         self._base_frame.setObjectName("OverlayBase")
-        
+
         shadow = theme.create_shadow(QColor(0, 0, 0, 75), radius=12, dy=3)
         if shadow:
             self._base_frame.setGraphicsEffect(shadow)
@@ -169,9 +169,11 @@ class TransitionalOverlay(QWidget):
         }
         icon_name = icon_mapping.get(art_type, "fa6s.file-lines")
         icon_c = "rgb(82, 82, 91)" if theme.is_light_theme() else "rgb(161, 161, 170)"
-        self._type_icon.setPixmap(theme.get_icon(icon_name, color=icon_c).pixmap(12, 12))
+        self._type_icon.setPixmap(
+            theme.get_icon(icon_name, color=icon_c).pixmap(12, 12)
+        )
         self._hdr_title.setText(f"{art_type} Crystallized")
-        
+
         # Snippet body
         max_len = 80
         snippet = text
@@ -187,7 +189,7 @@ class TransitionalOverlay(QWidget):
         is_bottom = self._core.corner in (Corner.BOTTOM_RIGHT, Corner.BOTTOM_LEFT)
         offset_y = 15 if is_bottom else -15
         start_pos = target_pos + QPoint(0, offset_y)
-        
+
         self.move(start_pos)
         self.setWindowOpacity(0.0)
         self.show()
@@ -208,7 +210,7 @@ class TransitionalOverlay(QWidget):
             return
         if self._opacity_anim.state() == QPropertyAnimation.State.Running:
             return
-            
+
         target_pos = self.pos()
         is_bottom = self._core.corner in (Corner.BOTTOM_RIGHT, Corner.BOTTOM_LEFT)
         offset_y = 15 if is_bottom else -15
@@ -216,10 +218,10 @@ class TransitionalOverlay(QWidget):
 
         self._opacity_anim.setStartValue(self.windowOpacity())
         self._opacity_anim.setEndValue(0.0)
-        
+
         self._pos_anim.setStartValue(target_pos)
         self._pos_anim.setEndValue(end_pos)
-        
+
         self._opacity_anim.finished.connect(self._on_collapse_done)
         self._opacity_anim.start()
         self._pos_anim.start()
@@ -267,6 +269,7 @@ class TransitionalOverlay(QWidget):
     def _on_mode_changed(self, mode: APRILMode) -> None:
         if mode == APRILMode.FOCUS:
             import database
+
             recent = database.get_artifacts("recent")
             if recent:
                 self.show_peek(recent[0]["type"], recent[0]["content"])
@@ -298,7 +301,10 @@ class TransitionalOverlay(QWidget):
         return QPoint(x, y)
 
     def _reposition(self, corner: Corner) -> None:
-        if self.isVisible() and self._pos_anim.state() != QPropertyAnimation.State.Running:
+        if (
+            self.isVisible()
+            and self._pos_anim.state() != QPropertyAnimation.State.Running
+        ):
             self.move(self._get_reposition_pos(corner))
 
     def paintEvent(self, _event) -> None:  # noqa: N802
@@ -309,7 +315,9 @@ class TransitionalOverlay(QWidget):
     def _apply_theme(self) -> None:
         is_light = theme.is_light_theme()
         txt_color = "rgb(24,24,27)" if is_light else "rgb(243,243,243)"
-        accent_color = f"rgb({theme.CYAN.red()}, {theme.CYAN.green()}, {theme.CYAN.blue()})"
+        accent_color = (
+            f"rgb({theme.CYAN.red()}, {theme.CYAN.green()}, {theme.CYAN.blue()})"
+        )
         icon_c = "rgb(82, 82, 91)" if is_light else "rgb(161, 161, 170)"
 
         self._base_frame.setStyleSheet("""
@@ -319,7 +327,9 @@ class TransitionalOverlay(QWidget):
             }
         """)
 
-        self._hdr_title.setStyleSheet(f"color: {accent_color}; background: transparent;")
+        self._hdr_title.setStyleSheet(
+            f"color: {accent_color}; background: transparent;"
+        )
         self._text_lbl.setStyleSheet(f"color: {txt_color}; background: transparent;")
 
         self._close_btn.setStyleSheet(_btn_ghost_style())
@@ -331,6 +341,7 @@ class TransitionalOverlay(QWidget):
 
 
 # ── Stylesheet Helpers ───────────────────────────────────────────────────────
+
 
 def _btn_solid_style() -> str:
     bg = f"rgba({theme.CYAN.red()}, {theme.CYAN.green()}, {theme.CYAN.blue()}, 220)"

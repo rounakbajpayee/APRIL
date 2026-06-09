@@ -190,6 +190,7 @@ class APRILBridge(QObject):
 
         # Determine type based on basic keyword indicators (auto-crystallization)
         import database
+
         art_type = "Note"
         title = "Voice Capture"
         lower_t = text.lower()
@@ -209,7 +210,7 @@ class APRILBridge(QObject):
             art_type=art_type,
             title=title,
             content=text,
-            status="Completed"
+            status="Completed",
         )
 
         if self._overlay is not None:
@@ -220,6 +221,7 @@ class APRILBridge(QObject):
     def open_workspace_to_recent(self, edit: bool = False) -> None:
         """Route from Quick Peek card to Web Workspace recent queue."""
         import webbrowser
+
         webbrowser.open("http://localhost:8080")
 
     def _apply_task(self, text: str) -> None:

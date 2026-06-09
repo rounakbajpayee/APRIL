@@ -12,7 +12,16 @@ except ImportError:
 
 import os
 import json
-from PyQt6.QtGui import QColor, QFont, QIcon, QPainter, QPen, QPainterPath, QLinearGradient, QBrush
+from PyQt6.QtGui import (
+    QColor,
+    QFont,
+    QIcon,
+    QPainter,
+    QPen,
+    QPainterPath,
+    QLinearGradient,
+    QBrush,
+)
 from PyQt6.QtCore import QSize, Qt
 from PyQt6.QtWidgets import QFrame
 
@@ -29,13 +38,14 @@ MICA_BLUR_RADIUS = 60
 
 # Preset accents (Curated designer color palettes for maximum premium aesthetic)
 PRESETS = {
-    "champagne": QColor(201, 169, 110),       # Muted Champagne Gold (#c9a96e)
-    "sapphire": QColor(79, 109, 122),         # Steel Sapphire Blue (#4f6d7a)
-    "sage": QColor(127, 154, 130),            # Soft Sage Green (#7f9a82)
-    "blush": QColor(212, 163, 115),           # Muted Blush Peach (#d4a373)
-    "lavender": QColor(138, 123, 167),        # Deep Lavender Violet (#8a7ba7)
-    "silver": QColor(181, 181, 186),          # Premium Platinum Silver (#b5b5ba)
+    "champagne": QColor(201, 169, 110),  # Muted Champagne Gold (#c9a96e)
+    "sapphire": QColor(79, 109, 122),  # Steel Sapphire Blue (#4f6d7a)
+    "sage": QColor(127, 154, 130),  # Soft Sage Green (#7f9a82)
+    "blush": QColor(212, 163, 115),  # Muted Blush Peach (#d4a373)
+    "lavender": QColor(138, 123, 167),  # Deep Lavender Violet (#8a7ba7)
+    "silver": QColor(181, 181, 186),  # Premium Platinum Silver (#b5b5ba)
 }
+
 
 def load_theme_config() -> None:
     """Load theme configuration from config.json if available."""
@@ -53,6 +63,7 @@ def load_theme_config() -> None:
         except Exception:
             pass
 
+
 def save_theme_config() -> None:
     """Save theme configuration to config.json."""
     data = {}
@@ -62,19 +73,22 @@ def save_theme_config() -> None:
                 data = json.load(f)
         except Exception:
             pass
-    data.update({
-        "accent_registry_sync": ACCENT_REGISTRY_SYNC,
-        "accent_preset": ACCENT_PRESET,
-        "accent_custom_hex": ACCENT_CUSTOM_HEX,
-        "mica_opacity": MICA_OPACITY,
-        "mica_blur_radius": MICA_BLUR_RADIUS,
-        "last_active_page": LAST_ACTIVE_PAGE
-    })
+    data.update(
+        {
+            "accent_registry_sync": ACCENT_REGISTRY_SYNC,
+            "accent_preset": ACCENT_PRESET,
+            "accent_custom_hex": ACCENT_CUSTOM_HEX,
+            "mica_opacity": MICA_OPACITY,
+            "mica_blur_radius": MICA_BLUR_RADIUS,
+            "last_active_page": LAST_ACTIVE_PAGE,
+        }
+    )
     try:
         with open(THEME_CONFIG_PATH, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
     except Exception:
         pass
+
 
 def get_dwm_accent_color() -> QColor | None:
     """Read Windows AccentColor from registry (HKCU\\Software\\Microsoft\\Windows\\DWM)."""
@@ -88,12 +102,13 @@ def get_dwm_accent_color() -> QColor | None:
         )
         val, _ = winreg.QueryValueEx(key, "AccentColor")
         # val is a DWORD containing 0xAABBGGRR (ABGR format)
-        b = (val >> 16) & 0xff
-        g = (val >> 8) & 0xff
-        r = val & 0xff
+        b = (val >> 16) & 0xFF
+        g = (val >> 8) & 0xFF
+        r = val & 0xFF
         return QColor(r, g, b)
     except Exception:
         return None
+
 
 # ── Dynamic Theme Tokens (updated via refresh_theme()) ───────────────────────
 WINDOWS_ACCENT = QColor(201, 169, 110)
@@ -172,7 +187,7 @@ def refresh_theme() -> None:
     accent = None
     if ACCENT_REGISTRY_SYNC:
         accent = get_dwm_accent_color()
-    
+
     if accent is None:
         if ACCENT_PRESET in PRESETS:
             accent = PRESETS[ACCENT_PRESET]
@@ -182,7 +197,7 @@ def refresh_theme() -> None:
                 accent = PRESETS["champagne"]
 
     WINDOWS_ACCENT = accent
-    
+
     # Calculate hover color (adjust brightness slightly)
     h, s, v, a = accent.getHsv()
     if v > 128:
@@ -209,9 +224,9 @@ def refresh_theme() -> None:
         BORDER_DIM = QColor(0, 0, 0, 12)
         BORDER_FOCUS = QColor(accent.red(), accent.green(), accent.blue(), 140)
 
-        TEXT_PRIMARY = QColor(24, 24, 27)          # Zinc 900
-        TEXT_SECONDARY = QColor(82, 82, 91)       # Zinc 600
-        TEXT_MUTED = QColor(161, 161, 170)        # Zinc 400
+        TEXT_PRIMARY = QColor(24, 24, 27)  # Zinc 900
+        TEXT_SECONDARY = QColor(82, 82, 91)  # Zinc 600
+        TEXT_MUTED = QColor(161, 161, 170)  # Zinc 400
         TEXT_ACCENT = WINDOWS_ACCENT_HOVER
     else:
         # ── Windows 11 Dark Mode (Mica Dark) ────────────────────────────────
@@ -229,11 +244,13 @@ def refresh_theme() -> None:
         TEXT_MUTED = QColor(113, 113, 122)
         TEXT_ACCENT = WINDOWS_ACCENT
 
+
 # Initialize tokens
 refresh_theme()
 
 
 # ── Typography ───────────────────────────────────────────────────────────────
+
 
 def ui_font(size: int = 11) -> QFont:
     """Segoe UI Variable variant selection based on size for Fluent Design alignment."""
@@ -243,7 +260,7 @@ def ui_font(size: int = 11) -> QFont:
         family = "Segoe UI Variable Text"
     else:
         family = "Segoe UI Variable Small"
-    
+
     f = QFont(family)
     f.setFamilies([family, "Segoe UI", "Inter", "sans-serif"])
     f.setPointSize(size)
@@ -267,10 +284,17 @@ def label_font(size: int = 9) -> QFont:
 
 # ── Elevation / Shadows ──────────────────────────────────────────────────────
 
-def create_shadow(color: QColor = QColor(0, 0, 0, 45), radius: float = 12, dx: float = 0, dy: float = 4):
+
+def create_shadow(
+    color: QColor = QColor(0, 0, 0, 45),
+    radius: float = 12,
+    dx: float = 0,
+    dy: float = 4,
+):
     """Factory function for modern soft drop shadows."""
     try:
         from PyQt6.QtWidgets import QGraphicsDropShadowEffect
+
         shadow = QGraphicsDropShadowEffect()
         shadow.setColor(color)
         shadow.setBlurRadius(radius)
@@ -281,6 +305,7 @@ def create_shadow(color: QColor = QColor(0, 0, 0, 45), radius: float = 12, dx: f
 
 
 # ── Icon System (qtawesome integration) ──────────────────────────────────────
+
 
 def _icon_color() -> str:
     """Adapts default icon color to theme contrast."""
@@ -294,6 +319,7 @@ def get_icon(name: str, color: str | None = None, size: int = 16) -> QIcon:
     """
     try:
         import qtawesome as qta
+
         c = color or _icon_color()
         return qta.icon(name, color=c, scale_factor=1.0)
     except Exception:
@@ -305,6 +331,7 @@ class MicaFrame(QFrame):
     Premium Fluent Design frame painting a dynamic Mica gradient,
     subtle noise texture, and elegant top-left highlight border.
     """
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
@@ -312,14 +339,14 @@ class MicaFrame(QFrame):
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        
+
         rect = self.rect()
         w, h = rect.width(), rect.height()
         radius = 16
-        
+
         is_light = is_light_theme()
         alpha = int(MICA_OPACITY * 2.55)
-        
+
         # 1. Paint background linear gradient matching Windows 11 Mica
         grad = QLinearGradient(0, 0, 0, h)
         if is_light:
@@ -328,20 +355,20 @@ class MicaFrame(QFrame):
         else:
             grad.setColorAt(0.0, QColor(36, 36, 36, alpha))
             grad.setColorAt(1.0, QColor(24, 24, 24, alpha))
-            
+
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(grad)
         p.drawRoundedRect(rect.adjusted(1, 1, -1, -1), radius, radius)
-        
+
         # 2. Add dynamic, organic, pseudo-random noise texture overlay to simulate real material roughness
         p.setPen(QColor(255, 255, 255, 4) if not is_light else QColor(0, 0, 0, 3))
         # Draw a beautiful, performant noise pattern using seed hash
         for x in range(3, w - 3, 2):
-            h_val = (x * 37) & 0xfff
+            h_val = (x * 37) & 0xFFF
             for y in range(3, h - 3, 2):
                 if ((h_val + y * 59) % 7) == 0:
                     p.drawPoint(x, y)
-                    
+
         # 3. Dual-Tone highlight & shadow bevel outline
         # Draw top-left highlight border (semi-transparent light)
         tl_path = QPainterPath()
@@ -352,7 +379,7 @@ class MicaFrame(QFrame):
         tl_path.arcTo(1, 1, radius * 2, radius * 2, 90, 90)
         tl_path.lineTo(1, h - radius)
         tl_path.arcTo(1, h - radius * 2 - 1, radius * 2, radius * 2, 180, 45)
-        
+
         tl_pen = QPen()
         tl_pen.setWidthF(1.0)
         tl_grad = QLinearGradient(0, 0, w, h)
@@ -367,14 +394,16 @@ class MicaFrame(QFrame):
         tl_pen.setBrush(tl_grad)
         p.setPen(tl_pen)
         p.drawPath(tl_path)
-        
+
         # Draw bottom-right shadow border
         br_path = QPainterPath()
         br_path.moveTo(w - 1, radius)
         br_path.lineTo(w - 1, h - radius)
-        br_path.arcTo(w - radius * 2 - 1, h - radius * 2 - 1, radius * 2, radius * 2, 0, -90)
+        br_path.arcTo(
+            w - radius * 2 - 1, h - radius * 2 - 1, radius * 2, radius * 2, 0, -90
+        )
         br_path.lineTo(radius, h - 1)
-        
+
         br_pen = QPen()
         br_pen.setWidthF(1.0)
         br_grad = QLinearGradient(w, 0, 0, h)
@@ -387,39 +416,35 @@ class MicaFrame(QFrame):
         br_pen.setBrush(br_grad)
         p.setPen(br_pen)
         p.drawPath(br_path)
-        
+
         p.end()
 
 
 def apply_fluent_effects(widget, use_acrylic: bool = False) -> None:
     """Apply native Windows 11 Mica/Acrylic background to a QWidget using Win32 DWM API."""
     import sys
+
     if sys.platform != "win32":
         return
     try:
         import ctypes
+
         hwnd = int(widget.winId())
         dwmapi = ctypes.windll.dwmapi
-        
+
         # 1. Enable Immersive Dark Mode on window title/borders if dark theme
         # DWMWA_USE_IMMERSIVE_DARK_MODE = 20
         dark_val = ctypes.c_int(0 if is_light_theme() else 1)
         dwmapi.DwmSetWindowAttribute(
-            hwnd,
-            20,
-            ctypes.byref(dark_val),
-            ctypes.sizeof(dark_val)
+            hwnd, 20, ctypes.byref(dark_val), ctypes.sizeof(dark_val)
         )
-        
+
         # 2. Set DWM Backdrop Type (Mica or Acrylic)
         # DWM_SYSTEMBACKDROP_TYPE = 38
         # DWMSBT_MAINWINDOW = 2 (Mica), DWMSBT_TRANSIENTWINDOW = 3 (Acrylic)
         backdrop_val = ctypes.c_int(3 if use_acrylic else 2)
         dwmapi.DwmSetWindowAttribute(
-            hwnd,
-            38,
-            ctypes.byref(backdrop_val),
-            ctypes.sizeof(backdrop_val)
+            hwnd, 38, ctypes.byref(backdrop_val), ctypes.sizeof(backdrop_val)
         )
     except Exception as e:
         print(f"[Theme] Failed to apply Fluent DWM effects: {e}")

@@ -86,61 +86,86 @@ def init_db() -> None:
     cursor.execute("SELECT COUNT(*) FROM artifacts;")
     if cursor.fetchone()[0] == 0:
         now_str = datetime.now().isoformat()
-        
+
         # 1. Lens Research Artifact
         art_lens_id = "art_lens_001"
-        cursor.execute("""
+        cursor.execute(
+            """
             INSERT INTO artifacts (id, workspace_id, type, title, content, status, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?);
-        """, (
-            art_lens_id, "lens", "Research",
-            "PyQt6 Animation Libraries Research",
-            "### Summary of PyQt6 Animation Libraries\n\n"
-            "1. **QPropertyAnimation**:\n"
-            "   - Easiest for changing opacity, geometry, and coordinates.\n"
-            "   - Fits natively with standard Qt styling.\n\n"
-            "2. **QGraphicsItemAnimation**:\n"
-            "   - Ideal for canvas-based elements and complex vector canvas movements.\n\n"
-            "3. **Paint Event Loops (Custom)**:\n"
-            "   - High performance, best for fluid micro-animations (e.g. soundwaves, ripples).",
-            "Completed", now_str, now_str
-        ))
+        """,
+            (
+                art_lens_id,
+                "lens",
+                "Research",
+                "PyQt6 Animation Libraries Research",
+                "### Summary of PyQt6 Animation Libraries\n\n"
+                "1. **QPropertyAnimation**:\n"
+                "   - Easiest for changing opacity, geometry, and coordinates.\n"
+                "   - Fits natively with standard Qt styling.\n\n"
+                "2. **QGraphicsItemAnimation**:\n"
+                "   - Ideal for canvas-based elements and complex vector canvas movements.\n\n"
+                "3. **Paint Event Loops (Custom)**:\n"
+                "   - High performance, best for fluid micro-animations (e.g. soundwaves, ripples).",
+                "Completed",
+                now_str,
+                now_str,
+            ),
+        )
 
         # 2. APRIL Task Artifact
-        cursor.execute("""
+        cursor.execute(
+            """
             INSERT INTO artifacts (id, workspace_id, type, title, content, status, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?);
-        """, (
-            "art_april_001", "april", "Task",
-            "Write Unit Tests for Bridge Layer",
-            "- [ ] Mock the PyQt6 signal callbacks.\n"
-            "- [ ] Test thread safety using QueuedConnections.\n"
-            "- [ ] Run pytest validation checking for trace emissions.",
-            "Pending", now_str, now_str
-        ))
+        """,
+            (
+                "art_april_001",
+                "april",
+                "Task",
+                "Write Unit Tests for Bridge Layer",
+                "- [ ] Mock the PyQt6 signal callbacks.\n"
+                "- [ ] Test thread safety using QueuedConnections.\n"
+                "- [ ] Run pytest validation checking for trace emissions.",
+                "Pending",
+                now_str,
+                now_str,
+            ),
+        )
 
         # 3. Homelab Agent Activity (Running)
         art_hl_id = "art_hl_001"
-        cursor.execute("""
+        cursor.execute(
+            """
             INSERT INTO artifacts (id, workspace_id, type, title, content, status, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?);
-        """, (
-            art_hl_id, "homelab", "Agent Activity",
-            "Homelab Cluster Health Check",
-            "### Health Check Status\n\n"
-            "- **Inference (mac)**: Online\n"
-            "- **Apps Stack (dell)**: Online\n"
-            "- **Gateway (cortex)**: Offline (needs attention)\n\n"
-            "Diagnostics run started automatically by background cron.",
-            "Running", now_str, now_str
-        ))
+        """,
+            (
+                art_hl_id,
+                "homelab",
+                "Agent Activity",
+                "Homelab Cluster Health Check",
+                "### Health Check Status\n\n"
+                "- **Inference (mac)**: Online\n"
+                "- **Apps Stack (dell)**: Online\n"
+                "- **Gateway (cortex)**: Offline (needs attention)\n\n"
+                "Diagnostics run started automatically by background cron.",
+                "Running",
+                now_str,
+                now_str,
+            ),
+        )
 
         # Seed logs for the Homelab Agent Activity
         hl_logs = [
             (art_hl_id, "Connecting to gateway at 192.168.0.234...", now_str),
             (art_hl_id, "Node 'mac (inference)' responded in 1.2ms.", now_str),
             (art_hl_id, "Node 'dell (apps)' responded in 3.4ms.", now_str),
-            (art_hl_id, "Gateway 'cortex' ping timed out after 5000ms. Flagged degraded.", now_str),
+            (
+                art_hl_id,
+                "Gateway 'cortex' ping timed out after 5000ms. Flagged degraded.",
+                now_str,
+            ),
         ]
         cursor.executemany(
             "INSERT INTO logs (artifact_id, message, created_at) VALUES (?, ?, ?);",
@@ -148,27 +173,41 @@ def init_db() -> None:
         )
 
         # 4. Personal Reminder
-        cursor.execute("""
+        cursor.execute(
+            """
             INSERT INTO artifacts (id, workspace_id, type, title, content, status, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?);
-        """, (
-            "art_pers_001", "personal", "Reminder",
-            "Buy Protein Powder",
-            "Buy high-quality grass-fed whey isolate from local store.\n"
-            "Trigger condition: Tomorrow at 9:00 AM.",
-            "Pending", now_str, now_str
-        ))
+        """,
+            (
+                "art_pers_001",
+                "personal",
+                "Reminder",
+                "Buy Protein Powder",
+                "Buy high-quality grass-fed whey isolate from local store.\n"
+                "Trigger condition: Tomorrow at 9:00 AM.",
+                "Pending",
+                now_str,
+                now_str,
+            ),
+        )
 
         # 5. Recent Capture (Transient Intake)
-        cursor.execute("""
+        cursor.execute(
+            """
             INSERT INTO artifacts (id, workspace_id, type, title, content, status, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?);
-        """, (
-            "art_rec_001", None, "Note",
-            "Quick Idea for Prompt Testing",
-            "We should write automated prompt regression tests directly running against the local Ollama LLM to compare output syntaxes between models.",
-            "Completed", now_str, now_str
-        ))
+        """,
+            (
+                "art_rec_001",
+                None,
+                "Note",
+                "Quick Idea for Prompt Testing",
+                "We should write automated prompt regression tests directly running against the local Ollama LLM to compare output syntaxes between models.",
+                "Completed",
+                now_str,
+                now_str,
+            ),
+        )
 
         conn.commit()
 
@@ -214,7 +253,7 @@ def get_artifacts(workspace_id: str | None = None) -> list[dict]:
         )
     else:
         cursor.execute("SELECT * FROM artifacts ORDER BY created_at DESC;")
-    
+
     rows = cursor.fetchall()
     conn.close()
     return [dict(r) for r in rows]
@@ -241,10 +280,10 @@ def update_artifact(
     """Update fields on an existing artifact."""
     conn = get_db_connection()
     cursor = conn.cursor()
-    
+
     fields = []
     params = []
-    
+
     if workspace_id is not None:
         # Note: we use "None" string or python None to set it to NULL
         if workspace_id == "recent":
@@ -252,7 +291,7 @@ def update_artifact(
         else:
             fields.append("workspace_id = ?")
             params.append(workspace_id)
-            
+
     if art_type is not None:
         fields.append("type = ?")
         params.append(art_type)
@@ -265,12 +304,12 @@ def update_artifact(
     if status is not None:
         fields.append("status = ?")
         params.append(status)
-        
+
     if fields:
         fields.append("updated_at = ?")
         params.append(datetime.now().isoformat())
         params.append(artifact_id)
-        
+
         query = f"UPDATE artifacts SET {', '.join(fields)} WHERE id = ?;"
         cursor.execute(query, params)
         conn.commit()

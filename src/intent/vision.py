@@ -18,7 +18,9 @@ TRIGGERS = [
     "read my screen",
     "take a screenshot",
 ]
-OLLAMA_DESCRIPTION = "Inspect the current screen or answer a question about it using local vision"
+OLLAMA_DESCRIPTION = (
+    "Inspect the current screen or answer a question about it using local vision"
+)
 EXAMPLES = [
     {
         "text": "what's on my screen",
@@ -59,6 +61,7 @@ def execute(
     ).strip()
     try:
         from screen_capture import capture_and_query
+
         reply = capture_and_query(question, config)
     except Exception as exc:
         import runtime_trace
