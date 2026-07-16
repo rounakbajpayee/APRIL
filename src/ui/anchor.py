@@ -90,7 +90,7 @@ class AmbientAnchor(QWidget):
             c_80 = theme.CYAN_80
             c_40 = theme.CYAN_40
             c_20 = theme.CYAN_20
-            
+
             if state == APRILState.DORMANT:
                 return (c_20, c_40)
             elif state == APRILState.SPEAKING:
@@ -213,7 +213,9 @@ class AmbientAnchor(QWidget):
             c.setAlpha(alpha)
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(QBrush(c))
-            p.drawEllipse(int(cx - dot_r), int(cy - dot_r), int(dot_r * 2), int(dot_r * 2))
+            p.drawEllipse(
+                int(cx - dot_r), int(cy - dot_r), int(dot_r * 2), int(dot_r * 2)
+            )
 
         elif state == APRILState.LISTENING:
             # Concentric expanding ripples
@@ -221,7 +223,9 @@ class AmbientAnchor(QWidget):
             curr_r = dot_r * pulse
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(QBrush(bright_col))
-            p.drawEllipse(int(cx - curr_r), int(cy - curr_r), int(curr_r * 2), int(curr_r * 2))
+            p.drawEllipse(
+                int(cx - curr_r), int(cy - curr_r), int(curr_r * 2), int(curr_r * 2)
+            )
 
             for i in range(2):
                 offset = (self._phase + i / 2.0) % 1.0
@@ -233,13 +237,17 @@ class AmbientAnchor(QWidget):
                 pen.setWidthF(1.0)
                 p.setPen(pen)
                 p.setBrush(Qt.BrushStyle.NoBrush)
-                p.drawEllipse(int(cx - ring_r), int(cy - ring_r), int(ring_r * 2), int(ring_r * 2))
+                p.drawEllipse(
+                    int(cx - ring_r), int(cy - ring_r), int(ring_r * 2), int(ring_r * 2)
+                )
 
         elif state == APRILState.THINKING:
             # Hugging spinning sweep arc loader
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(QBrush(bright_col))
-            p.drawEllipse(int(cx - dot_r), int(cy - dot_r), int(dot_r * 2), int(dot_r * 2))
+            p.drawEllipse(
+                int(cx - dot_r), int(cy - dot_r), int(dot_r * 2), int(dot_r * 2)
+            )
 
             angle = self._phase * 360
             arc_r = dot_r + 3.5
@@ -248,7 +256,9 @@ class AmbientAnchor(QWidget):
             pen.setCapStyle(Qt.PenCapStyle.RoundCap)
             p.setPen(pen)
             p.setBrush(Qt.BrushStyle.NoBrush)
-            rect = QRect(int(cx - arc_r), int(cy - arc_r), int(arc_r * 2), int(arc_r * 2))
+            rect = QRect(
+                int(cx - arc_r), int(cy - arc_r), int(arc_r * 2), int(arc_r * 2)
+            )
             p.drawArc(rect, int((angle % 360) * 16), int(120 * 16))
 
         elif state == APRILState.SPEAKING:
@@ -270,7 +280,9 @@ class AmbientAnchor(QWidget):
             # Radar sweeps line scanner
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(QBrush(bright_col))
-            p.drawEllipse(int(cx - dot_r), int(cy - dot_r), int(dot_r * 2), int(dot_r * 2))
+            p.drawEllipse(
+                int(cx - dot_r), int(cy - dot_r), int(dot_r * 2), int(dot_r * 2)
+            )
 
             angle_rad = self._phase * math.tau
             sweep_len = dot_r + 5.0
@@ -288,7 +300,9 @@ class AmbientAnchor(QWidget):
             curr_r = dot_r * pulse
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(QBrush(bright_col))
-            p.drawEllipse(int(cx - curr_r), int(cy - curr_r), int(curr_r * 2), int(curr_r * 2))
+            p.drawEllipse(
+                int(cx - curr_r), int(cy - curr_r), int(curr_r * 2), int(curr_r * 2)
+            )
 
         elif state == APRILState.ERROR:
             # Red flash rapid alert dot
@@ -296,7 +310,9 @@ class AmbientAnchor(QWidget):
             curr_r = dot_r * pulse
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(QBrush(bright_col))
-            p.drawEllipse(int(cx - curr_r), int(cy - curr_r), int(curr_r * 2), int(curr_r * 2))
+            p.drawEllipse(
+                int(cx - curr_r), int(cy - curr_r), int(curr_r * 2), int(curr_r * 2)
+            )
 
         p.end()
 
@@ -317,6 +333,7 @@ class AmbientAnchor(QWidget):
             delta = event.globalPosition().toPoint() - self._drag_start
             if delta.manhattanLength() < 5:  # tap, not drag
                 import webbrowser
+
                 webbrowser.open("http://localhost:8080")
             else:
                 self._snap_to_corner()
@@ -324,6 +341,7 @@ class AmbientAnchor(QWidget):
 
     def mouseDoubleClickEvent(self, _event):
         import webbrowser
+
         webbrowser.open("http://localhost:8080")
 
     def contextMenuEvent(self, event):
@@ -383,7 +401,7 @@ def _menu_style() -> str:
     """Dynamic, theme-adaptive context menu stylesheet mimicking Windows 11 Fluent design."""
     is_light = theme.is_light_theme()
     accent_rgb = f"rgb({theme.CYAN.red()}, {theme.CYAN.green()}, {theme.CYAN.blue()})"
-    
+
     if is_light:
         css = """
         QMenu {
@@ -466,4 +484,3 @@ def _menu_style() -> str:
         }
         """
         return css.replace("@ACCENT@", accent_rgb)
-

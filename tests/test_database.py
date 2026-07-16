@@ -6,13 +6,14 @@ import sqlite3
 
 import database
 
+
 class TestDatabaseFilters(unittest.TestCase):
     def setUp(self):
         # Create a temporary file database to isolate test state
         self.db_fd, self.db_path = tempfile.mkstemp()
         self.db_patcher = mock.patch("database.DB_PATH", self.db_path)
         self.db_patcher.start()
-        
+
         # Clear existing tables (if any) and seed clean schema
         database.init_db()
 
@@ -39,7 +40,7 @@ class TestDatabaseFilters(unittest.TestCase):
             art_type="Note",
             title="Unfiled Voice Note",
             content="This is a voice transcription capture.",
-            status="Completed"
+            status="Completed",
         )
 
         # 2. Unfiled Task (not a Note, should be excluded)
@@ -48,7 +49,7 @@ class TestDatabaseFilters(unittest.TestCase):
             art_type="Task",
             title="Unfiled Task",
             content="Should not be in dictations.",
-            status="Pending"
+            status="Pending",
         )
 
         # 3. Filed Note (has workspace, should be excluded)
@@ -57,7 +58,7 @@ class TestDatabaseFilters(unittest.TestCase):
             art_type="Note",
             title="Personal Workspace Note",
             content="This is associated with personal workspace.",
-            status="Completed"
+            status="Completed",
         )
 
         # 4. Filed Task (has workspace, should be excluded)
@@ -66,7 +67,7 @@ class TestDatabaseFilters(unittest.TestCase):
             art_type="Task",
             title="Personal Workspace Task",
             content="This is a personal workspace task.",
-            status="Pending"
+            status="Pending",
         )
 
         # Query recent artifacts (workspace_id = 'recent')
@@ -74,7 +75,7 @@ class TestDatabaseFilters(unittest.TestCase):
 
         # Assert only the unfiled Note is returned
         recent_ids = [r["id"] for r in recent_artifacts]
-        
+
         self.assertIn(art_unfiled_note, recent_ids)
         self.assertNotIn(art_unfiled_task, recent_ids)
         self.assertNotIn(art_filed_note, recent_ids)

@@ -193,8 +193,8 @@ def load_config() -> dict:
         "dell_ssh_user": "homelab",
         "jellyfin_host": "http://media.home.lan",
         "jellyfin_api_key": "",
-        "gemini_api_key": "",
-        "vision_model": "gemini-2.5-flash",
+        "vision_host": "http://192.168.0.234:8004",
+        "vision_timeout_seconds": 90,
         "audio_sample_rate": 16000,
         "audio_channels": 1,
         "audio_chunk_size": 1024,
@@ -996,6 +996,7 @@ def main():
     trace_startup("main() entered")
     config = load_config()
     import database
+
     database.init_db()
     global _system_prompt_hash
     from brain import _system_prompt
@@ -1049,15 +1050,19 @@ def main():
     anchor = AmbientAnchor(core)
     overlay = TransitionalOverlay(core)
     bridge.attach_overlay(overlay)
-    
+
     import webbrowser
-    core.settings_requested.connect(lambda: webbrowser.open("http://localhost:8080/#settings"))
+
+    core.settings_requested.connect(
+        lambda: webbrowser.open("http://localhost:8080/#settings")
+    )
     anchor.show()
     anchor._force_topmost()
     bridge.set_state("idle")
     _bridge_ref = bridge
     import threading
     from control_panel import start_control_panel
+
     threading.Thread(target=start_control_panel, args=(bridge,), daemon=True).start()
     trace_startup("surface system started")
     print("[main] surface system started")

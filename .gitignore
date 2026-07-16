@@ -30,3 +30,8 @@ repomix-output.xml
 # System files
 .DS_Store
 Thumbs.db
+
+.coverage
+.pytest_cache/
+.ruff_cache/
+*.jsonl
