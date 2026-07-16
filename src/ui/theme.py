@@ -10,19 +10,19 @@ try:
 except ImportError:
     winreg = None
 
-import os
 import json
+import os
+
+from PyQt6.QtCore import Qt
 from PyQt6.QtGui import (
     QColor,
     QFont,
     QIcon,
-    QPainter,
-    QPen,
-    QPainterPath,
     QLinearGradient,
-    QBrush,
+    QPainter,
+    QPainterPath,
+    QPen,
 )
-from PyQt6.QtCore import QSize, Qt
 from PyQt6.QtWidgets import QFrame
 
 THEME_CONFIG_PATH = os.path.join(
@@ -35,6 +35,7 @@ ACCENT_PRESET = "champagne"
 ACCENT_CUSTOM_HEX = "#c9a96e"
 MICA_OPACITY = 95
 MICA_BLUR_RADIUS = 60
+LAST_ACTIVE_PAGE = "Home"
 
 # Preset accents (Curated designer color palettes for maximum premium aesthetic)
 PRESETS = {
@@ -49,7 +50,8 @@ PRESETS = {
 
 def load_theme_config() -> None:
     """Load theme configuration from config.json if available."""
-    global ACCENT_REGISTRY_SYNC, ACCENT_PRESET, ACCENT_CUSTOM_HEX, MICA_OPACITY, MICA_BLUR_RADIUS, LAST_ACTIVE_PAGE
+    global ACCENT_REGISTRY_SYNC, ACCENT_PRESET, ACCENT_CUSTOM_HEX
+    global MICA_OPACITY, MICA_BLUR_RADIUS, LAST_ACTIVE_PAGE
     if os.path.exists(THEME_CONFIG_PATH):
         try:
             with open(THEME_CONFIG_PATH, "r", encoding="utf-8") as f:

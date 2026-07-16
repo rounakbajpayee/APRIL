@@ -1,6 +1,6 @@
 import json
-from pathlib import Path
 import unittest
+from pathlib import Path
 from unittest import mock
 
 import brain
@@ -512,3 +512,61 @@ class TestObservability(unittest.TestCase):
         )
         self.assertTrue(validated)
         self.assertEqual(validated[-1]["payload"]["verdict"], "auto_pass")
+
+    def test_opentelemetry_span_export(self):
+        """Verify that OpenTelemetry instrumentation emits spans correctly."""
+        from opentelemetry import trace
+        from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+        import runtime_trace
+
+        # Get the active TracerProvider and add our InMemorySpanExporter to it
+        provider = trace.get_tracer_provider()
+        memory_exporter = InMemorySpanExporter()
+        processor = SimpleSpanProcessor(memory_exporter)
+        provider.add_span_processor(processor)
+        
+        # Temporarily swap runtime_trace tracer
+        original_tracer = runtime_trace._tracer
+        runtime_trace._tracer = trace.get_tracer("april.runtime_trace.test")
+        
+        try:
+            runtime_trace.trace_event(
+                "test_otel_event",
+                subsystem="test_system",
+                severity="ERROR",
+                request_id="REQ-OTEL",
+                payload={"key": "value"}
+            )
+            
+            # Flush spans
+            runtime_trace.flush(0.1)
+            
+            spans = memory_exporter.get_finished_spans()
+            self.assertEqual(len(spans), 1)
+            span = spans[0]
+            self.assertEqual(span.name, "test_otel_event")
+            
+            events = span.events
+            self.assertEqual(len(events), 1)
+            self.assertEqual(events[0].name, "test_otel_event")
+            
+            attrs = events[0].attributes
+            self.assertEqual(attrs.get("subsystem"), "test_system")
+            self.assertEqual(attrs.get("severity"), "ERROR")
+            self.assertEqual(attrs.get("request_id"), "REQ-OTEL")
+            self.assertIn("key", attrs.get("payload", ""))
+            self.assertIn("value", attrs.get("payload", ""))
+        finally:
+            # Clean up the processor to prevent leakage to other tests
+            try:
+                with provider._active_span_processor._lock:
+                    processors = provider._active_span_processor._span_processors
+                    provider._active_span_processor._span_processors = tuple(
+                        p for p in processors if p is not processor
+                    )
+            except Exception:
+                pass
+            # Restore
+            runtime_trace._tracer = original_tracer
