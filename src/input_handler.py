@@ -9,14 +9,12 @@ pipeline. STT/brain/TTS are deliberately outside this file.
 import ctypes
 import ctypes.wintypes
 import io
-import os
 import threading
 import time
 import wave
 
 import runtime_trace
 from runtime_state_sink import RuntimeStateSink
-from tts import speak as speak_reply
 
 TRIGGER_KEY_NAME = "Key.f23"
 DEFAULT_SAMPLE_RATE = 16000

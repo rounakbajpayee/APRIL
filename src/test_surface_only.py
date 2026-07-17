@@ -3,8 +3,8 @@ Full main.py import chain, surface system only, no widget.py.
 Run from the april directory with: .venv\Scripts\python.exe src/test_surface_only.py
 """
 
-import sys
 import os
+import sys
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE_DIR)
@@ -12,15 +12,12 @@ sys.path.insert(0, BASE_DIR)
 
 def main():
     print("[test] importing runtime modules...")
-    from debug_log import log_event
-    from event_ledger import append_event
-    from state_engine import refresh_state_snapshot
 
     print("[test] runtime modules OK")
 
     print("[test] creating QApplication...")
-    from PyQt6.QtWidgets import QApplication
     from PyQt6.QtCore import QTimer
+    from PyQt6.QtWidgets import QApplication
 
     app = QApplication.instance() or QApplication(sys.argv[:1])
     app.setQuitOnLastWindowClosed(False)
@@ -28,9 +25,9 @@ def main():
 
     print("[test] importing surface system...")
     from ui import (
-        APRILCore,
-        APRILBridge,
         AmbientAnchor,
+        APRILBridge,
+        APRILCore,
         TransitionalOverlay,
     )
 

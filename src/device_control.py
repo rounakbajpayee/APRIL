@@ -166,6 +166,7 @@ def _get_endpoint_volume(devices, endpoint_volume_type):
 
     try:
         from ctypes import POINTER, cast
+
         from comtypes import CLSCTX_ALL
     except ImportError:
         return None

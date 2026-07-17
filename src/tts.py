@@ -8,9 +8,9 @@ without depending on remote infrastructure.
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
 import threading
-import shlex
 from typing import Any, Callable
 
 from session_manager import execute as execute_session_command
@@ -86,8 +86,8 @@ def resolve_engine(config: dict[str, Any]) -> str:
 
 
 def _speak_kokoro(text: str, config: dict[str, Any]) -> None:
-    import requests
     import pyaudio
+    import requests
 
     host = str(
         config.get("kokoro_host", "http://192.168.0.234:8002")

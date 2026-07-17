@@ -3,26 +3,26 @@ main.py - APRIL entry point.
 """
 
 import ctypes
-from datetime import datetime, timezone
+import hashlib
 import json
 import os
 import sys
 import threading
 import traceback
-import hashlib
 from uuid import uuid4
 
+import runtime_trace
 from brain import process as plan_with_brain
 from debug_log import log_event
 from event_ledger import append_event
 from intent import execute_plan
 from memory import append_turn
-from semantic_store import record_semantic_example
 from observer import collect_runtime_observation
+from semantic_store import record_semantic_example
 from state_engine import refresh_state_snapshot
 from stt import transcribe_with_metadata
-from tts import speak as speak_reply, stop as stop_speaking
-import runtime_trace
+from tts import speak as speak_reply
+from tts import stop as stop_speaking
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
@@ -855,6 +855,7 @@ def on_audio_captured(
             try:
                 try:
                     import time
+
                     import pyperclip
                     from pynput.keyboard import Controller, Key
 
@@ -901,8 +902,9 @@ def on_audio_captured(
                         f"[main] clipboard paste failed ({e}), falling back to slow typing"
                     )
                     try:
-                        from pynput.keyboard import Controller, Key
                         import time
+
+                        from pynput.keyboard import Controller, Key
 
                         keyboard = Controller()
                         for char in cleaned:
@@ -1039,9 +1041,9 @@ def main():
 
     # ── Surface system ───────────────────────────────────────────────────────────────────────
     from ui import (
-        APRILCore,
-        APRILBridge,
         AmbientAnchor,
+        APRILBridge,
+        APRILCore,
         TransitionalOverlay,
     )
 
@@ -1061,6 +1063,7 @@ def main():
     bridge.set_state("idle")
     _bridge_ref = bridge
     import threading
+
     from control_panel import start_control_panel
 
     threading.Thread(target=start_control_panel, args=(bridge,), daemon=True).start()

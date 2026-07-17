@@ -8,19 +8,27 @@ This document outlines the internal design, thread boundaries, and data flow of 
 
 APRIL splits work across thread boundaries to keep the UI responsive:
 
-```
-  [ Input / Global Hook Thread ]         [ Background Processing Thread ]
-        LowLevel Keyboard Hook                STT / Ollama Brain / TTS
-                  │                                       │
-                  ▼                                       ▼
-           InputHandler                             APRILCore State
-                  │                                       │
-                  └──────────► [ PyQt Signal Bridge ] ────┘
-                              Thread-Safe State Updates
-                                          │
-                                          ▼
-                                   [ Main UI Thread ]
-                                   PyQt Surface Orb
+```mermaid
+flowchart TD
+    subgraph HookThread[Input / Global Hook Thread]
+        LL[LowLevel Keyboard Hook] --> IH[InputHandler]
+    end
+
+    subgraph BGThread[Background Processing Thread]
+        Process[STT / Ollama Brain / TTS] --> Core[APRILCore State]
+    end
+
+    subgraph Bridge[PyQt Signal Bridge]
+        Signals[Thread-Safe State Updates]
+    end
+
+    subgraph MainThread[Main UI Thread]
+        UI[PyQt Surface Orb]
+    end
+
+    IH -- State change requests --> Signals
+    Core -- State updates --> Signals
+    Signals -- Signals via QueuedConnection --> UI
 ```
 
 1. **Input & Hook Thread:** LowLevel keyboard hooks (`WH_KEYBOARD_LL` via Windows native hooks or `pynput` fallback) capture hotkey actions. Modifiers and timestamps are tracked to filter repeat events.

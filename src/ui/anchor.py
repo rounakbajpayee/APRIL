@@ -6,33 +6,28 @@ driven by a QTimer at ~60 fps.  Drag snaps to nearest screen corner.
 """
 
 from __future__ import annotations
-import runtime_trace
 
 import math
+
 from PyQt6.QtCore import (
-    Qt,
-    QTimer,
     QPoint,
     QRect,
-    QPropertyAnimation,
-    QEasingCurve,
-    pyqtProperty,
-    QSize,
+    Qt,
+    QTimer,
 )
 from PyQt6.QtGui import (
+    QBrush,
+    QColor,
+    QCursor,
     QPainter,
     QPen,
-    QBrush,
-    QRadialGradient,
-    QColor,
-    QLinearGradient,
-    QPainterPath,
-    QCursor,
 )
-from PyQt6.QtWidgets import QWidget, QApplication
+from PyQt6.QtWidgets import QApplication, QWidget
 
-from .state import APRILCore, APRILState, APRILMode, Corner
+import runtime_trace
+
 from . import theme
+from .state import APRILCore, APRILState, Corner
 
 _STATE_COLORS: dict[APRILState, tuple[QColor, QColor]] = {
     APRILState.DORMANT: (theme.CYAN_20, theme.CYAN_40),

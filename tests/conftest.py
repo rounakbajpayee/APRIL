@@ -1,7 +1,6 @@
 import os
 import sys
-from unittest.mock import MagicMock, patch
-import pytest
+from unittest.mock import MagicMock
 
 # Ensure "src" is in PYTHONPATH so python can locate the modules
 sys.path.insert(
@@ -68,7 +67,22 @@ except ImportError:
     paramiko_mock = MagicMock()
     sys.modules["paramiko"] = paramiko_mock
 
-# Initialize tests SQLite database
+# Initialize tests SQLite database in memory
 import database
 
+database.DB_PATH = ":memory:"
 database.init_db()
+
+# ---------------------------------------------------------
+# Requests Mock
+# ---------------------------------------------------------
+import pytest
+import requests
+
+
+@pytest.fixture(autouse=True)
+def no_network_requests(monkeypatch):
+    def patched_post(*args, **kwargs):
+        raise RuntimeError("Network requests are mocked! Use a specific mock instead.")
+    monkeypatch.setattr(requests, "post", patched_post)
+    monkeypatch.setattr(requests, "get", patched_post)

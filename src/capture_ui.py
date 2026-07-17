@@ -1,16 +1,17 @@
-import sys
 import os
+import sys
 import time
+
 from PyQt6.QtWidgets import QApplication
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
+import database
 from ui import (
-    APRILCore,
     APRILBridge,
+    APRILCore,
     TransitionalOverlay,
 )
-import database
 
 
 def main():

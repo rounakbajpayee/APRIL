@@ -1,8 +1,8 @@
 import json
 import os
-from pathlib import Path
 import types
 import unittest
+from pathlib import Path
 from unittest import mock
 
 import brain

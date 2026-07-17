@@ -2,10 +2,10 @@
 #
 # Public API — import from here, not from submodules directly.
 
-from .state import APRILCore, APRILState, APRILMode, PresenceProfile, Corner
-from .bridge import APRILBridge
 from .anchor import AmbientAnchor
+from .bridge import APRILBridge
 from .overlay import TransitionalOverlay
+from .state import APRILCore, APRILMode, APRILState, Corner, PresenceProfile
 
 __all__ = [
     # State machine

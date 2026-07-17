@@ -1,7 +1,7 @@
 import json
-from pathlib import Path
 import types
 import unittest
+from pathlib import Path
 from unittest import mock
 
 import learning
@@ -149,9 +149,10 @@ class TestInputHandlerAndDictation(unittest.TestCase):
         )
 
     def test_input_handler_concurrency_and_key_repeat(self):
-        from input_handler import InputHandler
         import threading
         import time
+
+        from input_handler import InputHandler
 
         mock_surface = mock.MagicMock()
         handler = InputHandler(
@@ -231,6 +232,7 @@ class TestInputHandlerAndDictation(unittest.TestCase):
 
     def test_native_hook_latches_altdown_from_event_flags(self):
         import ctypes
+
         import input_handler as ih
 
         handler = ih.InputHandler(

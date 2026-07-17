@@ -1,5 +1,4 @@
-import pytest
-from semantic_store import _tokenize, _score_match
+from semantic_store import _score_match, _tokenize
 
 
 def test_tokenize():
@@ -10,6 +9,6 @@ def test_tokenize():
 
 def test_score_match():
     q_tokens = ["open", "browser"]
-    record = {"normalized": "open browser now"}
+    record = {"normalized_text": "open browser now"}
     score = _score_match("open browser", q_tokens, record)
     assert score > 0
