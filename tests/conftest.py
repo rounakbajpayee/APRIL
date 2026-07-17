@@ -2,6 +2,9 @@ import os
 import sys
 from unittest.mock import MagicMock
 
+import pytest
+import requests
+
 # Ensure "src" is in PYTHONPATH so python can locate the modules
 sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src"))
@@ -11,7 +14,7 @@ sys.path.insert(
 # PyAudio and Sound Mocks
 # ---------------------------------------------------------
 try:
-    import pyaudio
+    import pyaudio  # noqa: F401
 except ImportError:
     pyaudio_mock = MagicMock()
     # Stub PyAudio object creation
@@ -22,7 +25,7 @@ except ImportError:
 # Pycaw and Windows Volume Endpoint Mocks
 # ---------------------------------------------------------
 try:
-    import pycaw
+    import pycaw  # noqa: F401
 except ImportError:
     pycaw_mock = MagicMock()
     sys.modules["pycaw"] = pycaw_mock
@@ -32,7 +35,7 @@ except ImportError:
 # Screen Brightness Control Mock
 # ---------------------------------------------------------
 try:
-    import screen_brightness_control
+    import screen_brightness_control  # noqa: F401
 except ImportError:
     sbc_mock = MagicMock()
     sys.modules["screen_brightness_control"] = sbc_mock
@@ -41,7 +44,7 @@ except ImportError:
 # Pynput and Keyboard Hook Mocks
 # ---------------------------------------------------------
 try:
-    import pynput
+    import pynput  # noqa: F401
 except ImportError:
     pynput_mock = MagicMock()
     keyboard_mock = MagicMock()
@@ -53,7 +56,7 @@ except ImportError:
 # Pyperclip Mock
 # ---------------------------------------------------------
 try:
-    import pyperclip
+    import pyperclip  # noqa: F401
 except ImportError:
     pyperclip_mock = MagicMock()
     sys.modules["pyperclip"] = pyperclip_mock
@@ -62,7 +65,7 @@ except ImportError:
 # Paramiko SSH Mock
 # ---------------------------------------------------------
 try:
-    import paramiko
+    import paramiko  # noqa: F401
 except ImportError:
     paramiko_mock = MagicMock()
     sys.modules["paramiko"] = paramiko_mock
@@ -76,9 +79,6 @@ database.init_db()
 # ---------------------------------------------------------
 # Requests Mock
 # ---------------------------------------------------------
-import pytest
-import requests
-
 
 @pytest.fixture(autouse=True)
 def no_network_requests(monkeypatch):

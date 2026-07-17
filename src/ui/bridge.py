@@ -205,7 +205,7 @@ class APRILBridge(QObject):
             title = "Research Request"
 
         # Insert as unfiled (workspace_id = None) transient Recent queue
-        art_id = database.add_artifact(
+        database.add_artifact(
             workspace_id=None,
             art_type=art_type,
             title=title,
