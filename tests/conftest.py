@@ -80,6 +80,7 @@ database.init_db()
 # Requests Mock
 # ---------------------------------------------------------
 
+
 @pytest.fixture(autouse=True)
 def no_network_requests(monkeypatch):
     def patched_post(*args, **kwargs):
