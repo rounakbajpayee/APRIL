@@ -8,6 +8,7 @@ import re
 from typing import Any
 
 from device_control import perform
+
 from .tool_interface import IntentPlan, IntentResult
 
 INTENT_NAME = "device"

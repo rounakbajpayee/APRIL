@@ -1,8 +1,10 @@
 from __future__ import annotations
-import runtime_trace
 
 from enum import Enum, auto
+
 from PyQt6.QtCore import QObject, pyqtSignal
+
+import runtime_trace
 
 
 class APRILState(Enum):

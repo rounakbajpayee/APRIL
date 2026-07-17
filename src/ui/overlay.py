@@ -7,32 +7,29 @@ the Ambient Dot upon capture/notification and auto-dismisses after 5 seconds.
 
 from __future__ import annotations
 
-import math
 from PyQt6.QtCore import (
-    Qt,
-    QTimer,
-    QPropertyAnimation,
     QEasingCurve,
     QPoint,
-    pyqtSignal,
+    QPropertyAnimation,
+    Qt,
+    QTimer,
 )
 from PyQt6.QtGui import (
-    QPainter,
     QColor,
     QCursor,
+    QPainter,
 )
 from PyQt6.QtWidgets import (
-    QWidget,
-    QVBoxLayout,
+    QApplication,
     QHBoxLayout,
     QLabel,
     QPushButton,
-    QFrame,
-    QApplication,
+    QVBoxLayout,
+    QWidget,
 )
 
-from .state import APRILCore, APRILState, APRILMode, Corner
 from . import theme
+from .state import APRILCore, APRILMode, APRILState, Corner
 
 
 class TransitionalOverlay(QWidget):

@@ -33,9 +33,9 @@ Usage
 
 from __future__ import annotations
 
-import runtime_trace
+from PyQt6.QtCore import QObject, Qt, pyqtSignal
 
-from PyQt6.QtCore import QObject, pyqtSignal, Qt
+import runtime_trace
 
 from .state import APRILCore, APRILState
 
@@ -259,6 +259,7 @@ class APRILBridge(QObject):
             return
         try:
             import time
+
             import pyperclip
             from pynput.keyboard import Controller, Key
 
@@ -292,7 +293,7 @@ class APRILBridge(QObject):
             # Restore clipboard
             time.sleep(0.1)
             pyperclip.copy(old_clip)
-        except Exception as e:
+        except Exception:
             # Fallback to character typing
             try:
                 from pynput.keyboard import Controller, Key

@@ -9,18 +9,17 @@ APRIL uses a hybrid approach:
 
 from __future__ import annotations
 
-from datetime import datetime
 import json
+from datetime import datetime
 from pathlib import Path
-import re
 from typing import Any
 
+import runtime_trace
+import semantic_store
 from debug_log import latest_event_value, summarize_recent_activity
 from learning import apply_rewrites
 from memory import summarize_recent
-import semantic_store
 from state_engine import get_prompt_context_summary, load_snapshot
-import runtime_trace
 
 DEFAULT_TIMEOUT_SECONDS = 30
 BASE_DIR = Path(__file__).resolve().parent

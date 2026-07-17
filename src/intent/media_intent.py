@@ -7,6 +7,7 @@ from __future__ import annotations
 from typing import Any
 
 from media import handle_media
+
 from .tool_interface import IntentPlan, IntentResult
 
 INTENT_NAME = "media"

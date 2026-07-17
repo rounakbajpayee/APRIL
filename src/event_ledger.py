@@ -9,8 +9,8 @@ This is the first thin slice of the vNext stateful architecture:
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
 from typing import Any

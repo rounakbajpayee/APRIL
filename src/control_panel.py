@@ -12,11 +12,8 @@ Provides a premium dark-mode web interface to:
 from __future__ import annotations
 
 import json
-import os
-import sqlite3
-from http.server import BaseHTTPRequestHandler, HTTPServer
 import urllib.parse
-from datetime import datetime
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import database
 from ui import theme

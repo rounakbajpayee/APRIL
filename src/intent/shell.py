@@ -10,7 +10,9 @@ from pathlib import Path
 from typing import Any
 
 from brain import summarize_output
-from session_manager import describe_node, execute as execute_session_command
+from session_manager import describe_node
+from session_manager import execute as execute_session_command
+
 from .tool_interface import IntentPlan, IntentResult
 
 INTENT_NAME = "shell"
