@@ -96,4 +96,3 @@ def shutdown(timeout: float = 3.0) -> None:
     provider = trace.get_tracer_provider()
     if hasattr(provider, "shutdown"):
         provider.shutdown()
-

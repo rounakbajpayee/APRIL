@@ -84,5 +84,6 @@ import requests
 def no_network_requests(monkeypatch):
     def patched_post(*args, **kwargs):
         raise RuntimeError("Network requests are mocked! Use a specific mock instead.")
+
     monkeypatch.setattr(requests, "post", patched_post)
     monkeypatch.setattr(requests, "get", patched_post)

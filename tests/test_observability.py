@@ -517,7 +517,9 @@ class TestObservability(unittest.TestCase):
         """Verify that OpenTelemetry instrumentation emits spans correctly."""
         from opentelemetry import trace
         from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-        from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter,
+        )
 
         import runtime_trace
 
@@ -526,32 +528,32 @@ class TestObservability(unittest.TestCase):
         memory_exporter = InMemorySpanExporter()
         processor = SimpleSpanProcessor(memory_exporter)
         provider.add_span_processor(processor)
-        
+
         # Temporarily swap runtime_trace tracer
         original_tracer = runtime_trace._tracer
         runtime_trace._tracer = trace.get_tracer("april.runtime_trace.test")
-        
+
         try:
             runtime_trace.trace_event(
                 "test_otel_event",
                 subsystem="test_system",
                 severity="ERROR",
                 request_id="REQ-OTEL",
-                payload={"key": "value"}
+                payload={"key": "value"},
             )
-            
+
             # Flush spans
             runtime_trace.flush(0.1)
-            
+
             spans = memory_exporter.get_finished_spans()
             self.assertEqual(len(spans), 1)
             span = spans[0]
             self.assertEqual(span.name, "test_otel_event")
-            
+
             events = span.events
             self.assertEqual(len(events), 1)
             self.assertEqual(events[0].name, "test_otel_event")
-            
+
             attrs = events[0].attributes
             self.assertEqual(attrs.get("subsystem"), "test_system")
             self.assertEqual(attrs.get("severity"), "ERROR")

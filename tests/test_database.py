@@ -43,10 +43,10 @@ class TestDatabaseFilters(unittest.TestCase):
         # Use transaction savepoint to isolate state
         conn = database.get_db_connection()
         conn.execute("SAVEPOINT test_savepoint;")
-        
+
         # Wrap connection in proxy to prevent it from being closed by the helper functions
         proxy_conn = ConnectionProxy(conn)
-        
+
         with mock.patch("database.get_db_connection", return_value=proxy_conn):
             # 1. Unfiled Note (strictly a dictation)
             art_unfiled_note = database.add_artifact(
@@ -56,7 +56,7 @@ class TestDatabaseFilters(unittest.TestCase):
                 content="This is a voice transcription capture.",
                 status="Completed",
             )
-    
+
             # 2. Unfiled Task (not a Note, should be excluded)
             art_unfiled_task = database.add_artifact(
                 workspace_id=None,
@@ -65,7 +65,7 @@ class TestDatabaseFilters(unittest.TestCase):
                 content="Should not be in dictations.",
                 status="Pending",
             )
-    
+
             # 3. Filed Note (has workspace, should be excluded)
             art_filed_note = database.add_artifact(
                 workspace_id="personal",
@@ -74,7 +74,7 @@ class TestDatabaseFilters(unittest.TestCase):
                 content="This is associated with personal workspace.",
                 status="Completed",
             )
-    
+
             # 4. Filed Task (has workspace, should be excluded)
             art_filed_task = database.add_artifact(
                 workspace_id="personal",
@@ -83,20 +83,20 @@ class TestDatabaseFilters(unittest.TestCase):
                 content="This is a personal workspace task.",
                 status="Pending",
             )
-    
+
             # Query recent artifacts (workspace_id = 'recent')
             recent_artifacts = database.get_artifacts("recent")
-    
+
             # Assert only the unfiled Note is returned
             recent_ids = [r["id"] for r in recent_artifacts]
-    
+
             self.assertIn(art_unfiled_note, recent_ids)
             self.assertNotIn(art_unfiled_task, recent_ids)
             self.assertNotIn(art_filed_note, recent_ids)
             self.assertNotIn(art_filed_task, recent_ids)
-    
+
             self.assertGreaterEqual(len(recent_artifacts), 1)
-            
+
             # Find the specific one we added
             unfiled_note_record = next(
                 (r for r in recent_artifacts if r["id"] == art_unfiled_note), None
@@ -108,6 +108,6 @@ class TestDatabaseFilters(unittest.TestCase):
 
         # Rollback the savepoint to clean up the isolated state
         conn.execute("ROLLBACK TO SAVEPOINT test_savepoint;")
-        
+
         # Close the connection
         conn.close()
